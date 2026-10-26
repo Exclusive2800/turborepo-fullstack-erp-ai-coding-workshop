@@ -35,6 +35,30 @@ describe('WhoamiSchema', () => {
 
     expect(result.success).toBe(true);
   });
+
+  it('rejects a store-scoped STAFF principal with no assigned store', () => {
+    const result = WhoamiSchema.safeParse({
+      id: '1',
+      email: 'staff@erp.local',
+      name: 'Staff',
+      role: 'STAFF',
+      assignedStoreId: null,
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a cross-store principal pinned to a store', () => {
+    const result = WhoamiSchema.safeParse({
+      id: '1',
+      email: 'manager@erp.local',
+      name: 'Manager',
+      role: 'MANAGER',
+      assignedStoreId: 'store-b01',
+    });
+
+    expect(result.success).toBe(false);
+  });
 });
 
 describe('LoginInputSchema', () => {

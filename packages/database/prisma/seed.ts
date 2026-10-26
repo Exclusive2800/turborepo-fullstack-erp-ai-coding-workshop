@@ -47,6 +47,12 @@ async function main() {
     });
   }
 
+  // Reset to exactly the fixture: drop any account left over from an earlier seed (e.g. the old
+  // two-role demo users), so a reseed over an existing database matches a fresh one.
+  await prisma.user.deleteMany({
+    where: { email: { notIn: demoUsers.map((user) => user.email) } },
+  });
+
   console.log(
     `Seeded ${stores.length} stores and ${demoUsers.length} demo users (password: "${DEMO_PASSWORD}").`,
   );

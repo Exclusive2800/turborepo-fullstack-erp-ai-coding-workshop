@@ -1,15 +1,5 @@
-import { CROSS_STORE_ROLES, type User } from '@erp/contracts';
+import { isCrossStoreRole, type Whoami } from '@erp/contracts';
 import { ORPCError } from '@orpc/nest';
-
-/**
- * The authenticated caller enriched with their store assignment.
- * `assignedStoreId` is the single store a STAFF employee is pinned to, and null for cross-store roles.
- */
-export type StoreScopedUser = User & { assignedStoreId: string | null };
-
-function isCrossStore(user: StoreScopedUser): boolean {
-  return CROSS_STORE_ROLES.includes(user.role);
-}
 
 /**
  * Enforce that `user` may act on `targetStoreId`.
@@ -18,8 +8,8 @@ function isCrossStore(user: StoreScopedUser): boolean {
  * may act only for the single store it is assigned to. The caller derives `targetStoreId` from the
  * authenticated principal via {@link resolveStoreScope}, never from the request body.
  */
-export function assertStoreScope(user: StoreScopedUser, targetStoreId: string): void {
-  if (isCrossStore(user)) return;
+export function assertStoreScope(user: Whoami, targetStoreId: string): void {
+  if (isCrossStoreRole(user.role)) return;
   if (user.assignedStoreId && user.assignedStoreId === targetStoreId) return;
   throw new ORPCError('FORBIDDEN', { message: 'You cannot act for this store' });
 }
@@ -31,11 +21,8 @@ export function assertStoreScope(user: StoreScopedUser, targetStoreId: string): 
  * - STAFF: always their assigned store, whatever `requestedStoreId` claims. Rejects if unassigned.
  * - Cross-store roles: the `requestedStoreId` they named, which must be present.
  */
-export function resolveStoreScope(
-  user: StoreScopedUser,
-  requestedStoreId: string | undefined,
-): string {
-  if (!isCrossStore(user)) {
+export function resolveStoreScope(user: Whoami, requestedStoreId: string | undefined): string {
+  if (!isCrossStoreRole(user.role)) {
     if (!user.assignedStoreId) {
       throw new ORPCError('FORBIDDEN', { message: 'You are not assigned to a store' });
     }
