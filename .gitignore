@@ -31,3 +31,5 @@ coverage/
 
 # AI reviewer output (lessons/08)
 .ai-review/
+docker/certs/zscaler-root-ca.crt
+docker/dev.Dockerfile

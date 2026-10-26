@@ -7,6 +7,16 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends openssl ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
+# Corporate TLS interception (e.g. Zscaler) re-signs outbound HTTPS with a
+# private root CA. The host trusts it, but this clean container does not, so
+# npm/pnpm fail with UNABLE_TO_GET_ISSUER_CERT_LOCALLY. Add any *.crt files from
+# docker/certs/ to the system trust store so tools can verify intercepted TLS.
+# The build still works unchanged on networks without interception (no certs).
+COPY docker/certs/ /usr/local/share/ca-certificates/extra/
+RUN update-ca-certificates \
+  && npm config set cafile /etc/ssl/certs/ca-certificates.crt --global
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
+
 # Keep in sync with "packageManager" in the root package.json.
 RUN npm install -g pnpm@12.15.0
 
