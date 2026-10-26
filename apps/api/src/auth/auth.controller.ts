@@ -8,6 +8,7 @@ import type { Env } from '../config/env.js';
 import { PrismaService } from '../database/prisma.service.js';
 import { CurrentUser, Public } from './auth.decorators.js';
 import { USER_SELECT } from './auth.guard.js';
+import type { StoreScopedUser } from './store-scope.js';
 import { createSessionToken, SESSION_COOKIE, SESSION_TTL_MS } from './session-token.js';
 
 @Controller()
@@ -55,5 +56,13 @@ export class AuthController {
   @Implement(contract.auth.me)
   me(@CurrentUser() user: User | undefined) {
     return implement(contract.auth.me).handler(() => ({ user: user ?? null }));
+  }
+
+  @Implement(contract.auth.whoami)
+  whoami(@CurrentUser() user: StoreScopedUser | undefined) {
+    return implement(contract.auth.whoami).handler(() => {
+      if (!user) throw new ORPCError('UNAUTHORIZED');
+      return user;
+    });
   }
 }
