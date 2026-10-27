@@ -22,3 +22,11 @@ export const RETRY_MESSAGE = 'เกิดข้อผิดพลาด กร�
 
 /** The empty-state message shown when a list has no rows yet. */
 export const EMPTY_LIST_MESSAGE = 'ยังไม่มีข้อมูล';
+
+/** A SKU change was attempted after a transaction locked it. The user must correct the input. */
+export const SKU_LOCKED_MESSAGE =
+  'ไม่สามารถแก้ไขรหัสสินค้า (SKU) ได้ เนื่องจากมีการอ้างอิงในเอกสารแล้ว กรุณาคงรหัสเดิมไว้';
+
+/** A deactivated product was added to a new document. The user must correct the input. */
+export const PRODUCT_INACTIVE_MESSAGE =
+  'สินค้านี้ถูกปิดการใช้งานแล้ว ไม่สามารถเพิ่มลงในเอกสารใหม่ได้ กรุณาเลือกสินค้าอื่น';

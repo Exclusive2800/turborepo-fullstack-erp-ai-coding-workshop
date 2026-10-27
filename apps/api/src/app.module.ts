@@ -6,6 +6,7 @@ import { validateEnv } from './config/env.js';
 import { DatabaseModule } from './database/database.module.js';
 import { HealthModule } from './health/health.module.js';
 import { OpenApiModule } from './openapi/openapi.module.js';
+import { ProductsModule } from './products/products.module.js';
 import { StoresModule } from './stores/stores.module.js';
 import { SuppliersModule } from './suppliers/suppliers.module.js';
 
@@ -22,6 +23,7 @@ import { SuppliersModule } from './suppliers/suppliers.module.js';
     AuthModule,
     HealthModule,
     OpenApiModule,
+    ProductsModule,
     StoresModule,
     SuppliersModule,
   ],
