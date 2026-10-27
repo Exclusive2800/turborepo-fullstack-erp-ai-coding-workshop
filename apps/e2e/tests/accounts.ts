@@ -7,6 +7,7 @@ export const DEMO_PASSWORD = 'password';
 
 export const accounts = {
   admin: { email: 'admin@erp.local', name: 'Admin User', role: 'ADMIN' },
+  manager: { email: 'manager01@erp.local', name: 'Manager One', role: 'MANAGER' },
   staff: { email: 'staff_b01@erp.local', name: 'Staff B01', role: 'STAFF' },
 } as const;
 
