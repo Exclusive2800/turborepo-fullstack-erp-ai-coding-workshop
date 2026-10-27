@@ -10,7 +10,7 @@
         "type": "command",
         "command": "node scripts/agent-guard.mjs"
       },
-      "enabled": true
+      "enabled": false
     }
   ]
 }
