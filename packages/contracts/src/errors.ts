@@ -44,8 +44,7 @@ export const PO_QUANTITY_POSITIVE_MESSAGE =
   'จำนวนสั่งซื้อต้องเป็นจำนวนเต็มบวก (มากกว่า 0 และไม่มีเศษทศนิยม) กรุณาแก้ไข';
 
 /** A PO line's purchase unit price was negative (PO-02). Correct the input. */
-export const PO_UNIT_PRICE_NONNEGATIVE_MESSAGE =
-  'ราคาต่อหน่วยต้องไม่ติดลบ กรุณาแก้ไข';
+export const PO_UNIT_PRICE_NONNEGATIVE_MESSAGE = 'ราคาต่อหน่วยต้องไม่ติดลบ กรุณาแก้ไข';
 
 /** The same SKU appeared on more than one line of a single PO (PO-02). Correct the input. */
 export const PO_DUPLICATE_SKU_MESSAGE =

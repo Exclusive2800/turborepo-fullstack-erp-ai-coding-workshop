@@ -37,7 +37,9 @@ function DraftPurchaseOrderForm() {
   const [expectedReceiptDate, setExpectedReceiptDate] = useState('');
   const [lines, setLines] = useState<DraftLine[]>([newLine()]);
 
-  const suppliers = useQuery(orpc.supplier.list.queryOptions({ input: { page: 1, pageSize: 100 } }));
+  const suppliers = useQuery(
+    orpc.supplier.list.queryOptions({ input: { page: 1, pageSize: 100 } }),
+  );
   const stores = useQuery(orpc.store.list.queryOptions({ input: { page: 1, pageSize: 100 } }));
   const products = useQuery(orpc.product.list.queryOptions({ input: { page: 1, pageSize: 100 } }));
   const supplierItems = suppliers.data?.items ?? [];
@@ -138,7 +140,10 @@ function DraftPurchaseOrderForm() {
           <fieldset className="space-y-3">
             <legend className="text-sm text-muted-foreground">รายการสินค้า</legend>
             {lines.map((line, index) => (
-              <div key={line.key} className="grid gap-3 sm:grid-cols-[2fr_1fr_1fr_auto] sm:items-end">
+              <div
+                key={line.key}
+                className="grid gap-3 sm:grid-cols-[2fr_1fr_1fr_auto] sm:items-end"
+              >
                 <div className="space-y-2">
                   <Label htmlFor={`po-line-product-${line.key}`}>สินค้า {index + 1}</Label>
                   <select

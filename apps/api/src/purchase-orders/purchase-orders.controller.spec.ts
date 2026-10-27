@@ -99,7 +99,9 @@ describe('PurchaseOrdersController', () => {
     it('creates a DRAFT order for a purchasing user with an allocated PO number', async () => {
       const findMany = vi
         .fn()
-        .mockResolvedValue([{ id: 'p1', sku: 'SKU001', name: 'Drinking water pack of 6', active: true }]);
+        .mockResolvedValue([
+          { id: 'p1', sku: 'SKU001', name: 'Drinking water pack of 6', active: true },
+        ]);
       const allocateDocumentNumber = vi.fn().mockResolvedValue('PO-000001');
       const post = vi.fn();
       const { controller, txCreate } = await createController({
@@ -119,7 +121,11 @@ describe('PurchaseOrdersController', () => {
       // The order is persisted at DRAFT with the creator recorded.
       expect(txCreate).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ status: 'DRAFT', number: 'PO-000001', createdById: 'u-buyer' }),
+          data: expect.objectContaining({
+            status: 'DRAFT',
+            number: 'PO-000001',
+            createdById: 'u-buyer',
+          }),
         }),
       );
     });
@@ -165,7 +171,9 @@ describe('PurchaseOrdersController', () => {
     it('writes no stock movement when creating an order (PO-02)', async () => {
       const findMany = vi
         .fn()
-        .mockResolvedValue([{ id: 'p1', sku: 'SKU001', name: 'Drinking water pack of 6', active: true }]);
+        .mockResolvedValue([
+          { id: 'p1', sku: 'SKU001', name: 'Drinking water pack of 6', active: true },
+        ]);
       const post = vi.fn();
       const { controller } = await createController({
         product: { findMany },
@@ -213,7 +221,11 @@ describe('PurchaseOrdersController', () => {
       const result = await call(controller.get(), { id: 'po1' });
 
       expect(result).toMatchObject({ id: 'po1', number: 'PO-000001', status: 'DRAFT' });
-      expect(result.lines[0]).toMatchObject({ sku: 'SKU001', unitPrice: '45.00', lineTotal: '900.00' });
+      expect(result.lines[0]).toMatchObject({
+        sku: 'SKU001',
+        unitPrice: '45.00',
+        lineTotal: '900.00',
+      });
     });
 
     it('returns NOT_FOUND for a missing order', async () => {

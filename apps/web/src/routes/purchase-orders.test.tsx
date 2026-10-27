@@ -189,9 +189,7 @@ describe('PurchaseOrdersPage', () => {
   });
 
   it('shows the actionable Thai message when the API rejects a duplicate SKU', async () => {
-    mockApi(
-      referenceData({ 'POST /purchase-orders': conflict(PO_DUPLICATE_SKU_MESSAGE) }),
-    );
+    mockApi(referenceData({ 'POST /purchase-orders': conflict(PO_DUPLICATE_SKU_MESSAGE) }));
 
     renderPage();
 

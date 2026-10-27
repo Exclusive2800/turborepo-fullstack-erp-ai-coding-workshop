@@ -157,9 +157,7 @@ export class PurchaseOrdersController {
         };
       });
 
-      const total = toMoney(
-        lineData.reduce((sum, line) => sum + Number(line.lineTotal), 0),
-      );
+      const total = toMoney(lineData.reduce((sum, line) => sum + Number(line.lineTotal), 0));
 
       const row = await this.prisma.$transaction(async (tx) => {
         const number = await this.posting.allocateDocumentNumber(

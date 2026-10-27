@@ -31,7 +31,15 @@ test.describe('draft purchase orders', () => {
       [sku2, 'กระดาษทิชชูสำหรับทดสอบใบสั่งซื้อ'],
     ]) {
       const created = await admin.post('/api/products', {
-        data: { sku, name, category: 'ของใช้', unit: 'ชิ้น', sellingPrice: 10, active: true, thresholds: [] },
+        data: {
+          sku,
+          name,
+          category: 'ของใช้',
+          unit: 'ชิ้น',
+          sellingPrice: 10,
+          active: true,
+          thresholds: [],
+        },
       });
       expect(created.ok(), `create ${sku} returned ${created.status()}`).toBeTruthy();
     }
@@ -53,9 +61,7 @@ test.describe('draft purchase orders', () => {
     await admin.dispose();
 
     await page.goto('/purchase-orders');
-    await expect(
-      page.getByRole('heading', { name: 'สร้างใบสั่งซื้อ (ฉบับร่าง)' }),
-    ).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'สร้างใบสั่งซื้อ (ฉบับร่าง)' })).toBeVisible();
 
     // Fill the header.
     await page
@@ -65,11 +71,15 @@ test.describe('draft purchase orders', () => {
     await page.getByLabel('วันที่คาดว่าจะรับสินค้า').fill('2026-02-01');
 
     // A duplicate SKU is rejected: both lines point at sku1.
-    await page.getByLabel('สินค้า 1').selectOption({ label: `${sku1} — น้ำดื่มสำหรับทดสอบใบสั่งซื้อ` });
+    await page
+      .getByLabel('สินค้า 1')
+      .selectOption({ label: `${sku1} — น้ำดื่มสำหรับทดสอบใบสั่งซื้อ` });
     await page.getByLabel('จำนวน 1').fill('20');
     await page.getByLabel('ราคาต่อหน่วย 1').fill('45');
     await page.getByRole('button', { name: 'เพิ่มรายการ' }).click();
-    await page.getByLabel('สินค้า 2').selectOption({ label: `${sku1} — น้ำดื่มสำหรับทดสอบใบสั่งซื้อ` });
+    await page
+      .getByLabel('สินค้า 2')
+      .selectOption({ label: `${sku1} — น้ำดื่มสำหรับทดสอบใบสั่งซื้อ` });
     await page.getByLabel('จำนวน 2').fill('5');
     await page.getByLabel('ราคาต่อหน่วย 2').fill('35');
     await page.getByRole('button', { name: 'บันทึกใบสั่งซื้อ' }).click();
@@ -77,7 +87,9 @@ test.describe('draft purchase orders', () => {
 
     // A negative price is rejected at the contract boundary. Point line 2 at sku2 and set a
     // negative price; the native min="0" is bypassed by typing, so the API returns the Thai error.
-    await page.getByLabel('สินค้า 2').selectOption({ label: `${sku2} — กระดาษทิชชูสำหรับทดสอบใบสั่งซื้อ` });
+    await page
+      .getByLabel('สินค้า 2')
+      .selectOption({ label: `${sku2} — กระดาษทิชชูสำหรับทดสอบใบสั่งซื้อ` });
     await page.getByLabel('ราคาต่อหน่วย 2').fill('-5');
     await page.getByRole('button', { name: 'บันทึกใบสั่งซื้อ' }).click();
     await expect(page.getByRole('alert')).toContainText('ติดลบ');
