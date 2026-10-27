@@ -10,7 +10,18 @@ const stores = [
   { code: 'B02', name: 'Riverside' },
 ];
 
+const suppliers = [
+  {
+    code: 'SUP01',
+    name: 'SupplyOne',
+    contactName: 'Somchai Prasert',
+    contactEmail: 'somchai@supplyone.co.th',
+    contactPhone: '02-123-4567',
+  },
+];
+
 // The four-role model (TOR Section 2). STAFF is pinned to a store; the rest are cross-store.
+const DEMO_PASSWORD = 'password';
 const demoUsers = [
   { email: 'admin@erp.local', name: 'Admin User', role: Role.ADMIN, storeCode: null },
   { email: 'buyer01@erp.local', name: 'Buyer One', role: Role.PURCHASING, storeCode: null },
@@ -18,7 +29,6 @@ const demoUsers = [
   { email: 'staff_b01@erp.local', name: 'Staff B01', role: Role.STAFF, storeCode: 'B01' },
   { email: 'staff_b02@erp.local', name: 'Staff B02', role: Role.STAFF, storeCode: 'B02' },
 ];
-const DEMO_PASSWORD = 'password';
 
 async function main() {
   const storeByCode = new Map<string, string>();
@@ -29,6 +39,19 @@ async function main() {
       create: store,
     });
     storeByCode.set(store.code, row.id);
+  }
+
+  for (const supplier of suppliers) {
+    await prisma.supplier.upsert({
+      where: { code: supplier.code },
+      update: {
+        name: supplier.name,
+        contactName: supplier.contactName,
+        contactEmail: supplier.contactEmail,
+        contactPhone: supplier.contactPhone,
+      },
+      create: supplier,
+    });
   }
 
   const passwordHash = await hashPassword(DEMO_PASSWORD);
@@ -47,14 +70,18 @@ async function main() {
     });
   }
 
-  // Reset to exactly the fixture: drop any account left over from an earlier seed (e.g. the old
-  // two-role demo users), so a reseed over an existing database matches a fresh one.
+  // Reset to exactly the fixture: drop any account, store or supplier left over from an earlier
+  // seed, so a reseed over an existing database matches a fresh one.
   await prisma.user.deleteMany({
     where: { email: { notIn: demoUsers.map((user) => user.email) } },
   });
+  await prisma.store.deleteMany({ where: { code: { notIn: stores.map((store) => store.code) } } });
+  await prisma.supplier.deleteMany({
+    where: { code: { notIn: suppliers.map((supplier) => supplier.code) } },
+  });
 
   console.log(
-    `Seeded ${stores.length} stores and ${demoUsers.length} demo users (password: "${DEMO_PASSWORD}").`,
+    `Seeded ${stores.length} stores, ${suppliers.length} suppliers and ${demoUsers.length} demo users (password: "${DEMO_PASSWORD}").`,
   );
 }
 
