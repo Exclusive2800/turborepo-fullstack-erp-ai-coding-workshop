@@ -38,12 +38,13 @@ model User {
 }
 
 model Store {
-  id        String   @id @default(cuid())
-  code      String   @unique
-  name      String
-  users     User[]
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  id         String   @id @default(cuid())
+  code       String   @unique
+  name       String
+  users      User[]
+  thresholds ProductStoreThreshold[]
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
 }
 
 model Supplier {
@@ -55,4 +56,40 @@ model Supplier {
   contactPhone String?
   createdAt    DateTime @default(now()) @db.Timestamptz(3)
   updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+}
+
+// A catalogue product (MD-01/MD-02). SKU is unique across the organization and cannot change
+// once a transaction references the product — `skuLocked` is flipped by the transaction features
+// in later tickets; the update handler refuses a SKU change while it is set. `active` controls
+// whether the product may be added to a *new* document; deactivated products stay searchable in
+// historical records (the list endpoint still returns them). Monetary values are two decimals.
+model Product {
+  id           String   @id @default(cuid())
+  sku          String   @unique
+  name         String
+  category     String
+  unit         String
+  sellingPrice Decimal  @db.Decimal(12, 2)
+  active       Boolean  @default(true)
+  /// Set once a transaction references this product, locking the SKU against edits.
+  skuLocked    Boolean  @default(false)
+  /// Per-store reorder thresholds (INV low-stock). One row per store that has a threshold set.
+  thresholds   ProductStoreThreshold[]
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+}
+
+// A product's reorder threshold for one store. Thresholds are per-store (MD-01): the same product
+// can reorder at a different level in each branch. Non-negative whole number.
+model ProductStoreThreshold {
+  id        String   @id @default(cuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  threshold Int
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([productId, storeId])
 }
