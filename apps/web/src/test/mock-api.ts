@@ -24,3 +24,8 @@ export function unauthorized(message = 'Unauthorized') {
     { status: 401 },
   );
 }
+
+/** The 409 the API sends when a unique code (store/supplier) is already taken. */
+export function conflict(message = 'Conflict') {
+  return Response.json({ defined: false, code: 'CONFLICT', status: 409, message }, { status: 409 });
+}
