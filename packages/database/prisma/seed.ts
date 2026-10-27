@@ -172,6 +172,75 @@ async function main() {
     });
   }
 
+  // Demo purchase order PO-DEMO-001 (TOR Section 8): 20× SKU001 @ 45.00, destination B01, no
+  // receipts. The TOR fixture describes it as *Approved*, but the approval transition is owned by
+  // the PO state machine (#8); #7 only ever writes DRAFT and users never set status directly. So we
+  // seed it at DRAFT now and leave a TODO for #8 to flip it to APPROVED through a real transition
+  // once the state machine lands — we do NOT fabricate the APPROVED state here. Idempotent: the row
+  // is keyed by its unique document number and its single line is reset to the fixture each run.
+  // TODO(#8): once the PO state machine exists, advance PO-DEMO-001 DRAFT → PENDING_APPROVAL →
+  // APPROVED via valid transitions so the seed matches the TOR's "Approved PO-DEMO-001" fixture.
+  const PO_DEMO_NUMBER = 'PO-DEMO-001';
+  const sku001Id = productIdBySku.get('SKU001');
+  const buyer = await prisma.user.findUnique({ where: { email: 'buyer01@erp.local' } });
+  if (sku001Id && b01Id) {
+    const sku001 = products.find((product) => product.sku === 'SKU001');
+    const demoQuantity = 20;
+    const demoUnitPrice = '45.00';
+    const demoLineTotal = (demoQuantity * Number(demoUnitPrice)).toFixed(2);
+    const existing = await prisma.purchaseOrder.findUnique({ where: { number: PO_DEMO_NUMBER } });
+    if (existing) {
+      await prisma.purchaseOrderLine.deleteMany({ where: { purchaseOrderId: existing.id } });
+      await prisma.purchaseOrder.update({
+        where: { id: existing.id },
+        data: {
+          status: 'DRAFT',
+          supplierId: (await prisma.supplier.findUniqueOrThrow({ where: { code: 'SUP01' } })).id,
+          storeId: b01Id,
+          expectedReceiptDate: new Date('2026-02-01T00:00:00.000Z'),
+          total: demoLineTotal,
+          createdById: buyer?.id ?? null,
+          lines: {
+            create: [
+              {
+                productId: sku001Id,
+                sku: 'SKU001',
+                productName: sku001?.name ?? 'SKU001',
+                quantity: demoQuantity,
+                unitPrice: demoUnitPrice,
+                lineTotal: demoLineTotal,
+              },
+            ],
+          },
+        },
+      });
+    } else {
+      await prisma.purchaseOrder.create({
+        data: {
+          number: PO_DEMO_NUMBER,
+          status: 'DRAFT',
+          supplierId: (await prisma.supplier.findUniqueOrThrow({ where: { code: 'SUP01' } })).id,
+          storeId: b01Id,
+          expectedReceiptDate: new Date('2026-02-01T00:00:00.000Z'),
+          total: demoLineTotal,
+          createdById: buyer?.id ?? null,
+          lines: {
+            create: [
+              {
+                productId: sku001Id,
+                sku: 'SKU001',
+                productName: sku001?.name ?? 'SKU001',
+                quantity: demoQuantity,
+                unitPrice: demoUnitPrice,
+                lineTotal: demoLineTotal,
+              },
+            ],
+          },
+        },
+      });
+    }
+  }
+
   // Reset to exactly the fixture: drop any account, store or supplier left over from an earlier
   // seed, so a reseed over an existing database matches a fresh one.
   await prisma.user.deleteMany({
@@ -184,6 +253,9 @@ async function main() {
   await prisma.product.deleteMany({
     where: { sku: { notIn: products.map((product) => product.sku) } },
   });
+  // Reset purchase orders to exactly the fixture: drop any order other than PO-DEMO-001 (its lines
+  // cascade). Keeps a reseed over an existing database identical to a fresh one.
+  await prisma.purchaseOrder.deleteMany({ where: { number: { notIn: [PO_DEMO_NUMBER] } } });
 
   console.log(
     `Seeded ${stores.length} stores, ${suppliers.length} suppliers, ${products.length} products (B01 opening stock via the ledger: SKU001=${B01_OPENING.SKU001}, SKU002=${B01_OPENING.SKU002}, SKU003=${B01_OPENING.SKU003}; B02 all zero) and ${demoUsers.length} demo users (password: "${DEMO_PASSWORD}").`,
