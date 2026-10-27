@@ -38,3 +38,19 @@ export const ADJUSTMENT_REASON_REQUIRED_MESSAGE =
 /** A stock change would drive the balance below zero (INV-03/04). The user must correct the quantity. */
 export const INSUFFICIENT_STOCK_MESSAGE =
   'จำนวนสินค้าคงเหลือไม่เพียงพอ ไม่สามารถทำรายการที่ทำให้สต็อกติดลบได้ กรุณาตรวจสอบจำนวน';
+
+/** An ordered quantity on a PO line was not a positive whole number (PO-02). Correct the input. */
+export const PO_QUANTITY_POSITIVE_MESSAGE =
+  'จำนวนสั่งซื้อต้องเป็นจำนวนเต็มบวก (มากกว่า 0 และไม่มีเศษทศนิยม) กรุณาแก้ไข';
+
+/** A PO line's purchase unit price was negative (PO-02). Correct the input. */
+export const PO_UNIT_PRICE_NONNEGATIVE_MESSAGE =
+  'ราคาต่อหน่วยต้องไม่ติดลบ กรุณาแก้ไข';
+
+/** The same SKU appeared on more than one line of a single PO (PO-02). Correct the input. */
+export const PO_DUPLICATE_SKU_MESSAGE =
+  'มีสินค้าซ้ำกันในใบสั่งซื้อเดียวกัน กรุณารวมเป็นรายการเดียวหรือลบรายการที่ซ้ำ';
+
+/** A PO was submitted without any product line (PO-01). The user must add at least one line. */
+export const PO_LINES_REQUIRED_MESSAGE =
+  'ใบสั่งซื้อต้องมีสินค้าอย่างน้อย 1 รายการ กรุณาเพิ่มรายการสินค้า';

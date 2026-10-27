@@ -1,6 +1,7 @@
 import { authContract } from './auth.js';
 import { healthContract } from './health.js';
 import { productContract } from './product.js';
+import { purchaseOrderContract } from './purchase-order.js';
 import { stockContract } from './stock.js';
 import { storeContract } from './store.js';
 import { supplierContract } from './supplier.js';
@@ -10,6 +11,7 @@ export * from './errors.js';
 export * from './health.js';
 export * from './pagination.js';
 export * from './product.js';
+export * from './purchase-order.js';
 export * from './stock.js';
 export * from './store.js';
 export * from './supplier.js';
@@ -25,6 +27,7 @@ export const contract = {
   auth: authContract,
   health: healthContract,
   product: productContract,
+  purchaseOrder: purchaseOrderContract,
   stock: stockContract,
   store: storeContract,
   supplier: supplierContract,
