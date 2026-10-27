@@ -30,3 +30,7 @@ export const SKU_LOCKED_MESSAGE =
 /** A deactivated product was added to a new document. The user must correct the input. */
 export const PRODUCT_INACTIVE_MESSAGE =
   'สินค้านี้ถูกปิดการใช้งานแล้ว ไม่สามารถเพิ่มลงในเอกสารใหม่ได้ กรุณาเลือกสินค้าอื่น';
+
+/** A stock change would drive the balance below zero (INV-03/04). The user must correct the quantity. */
+export const INSUFFICIENT_STOCK_MESSAGE =
+  'จำนวนสินค้าคงเหลือไม่เพียงพอ ไม่สามารถทำรายการที่ทำให้สต็อกติดลบได้ กรุณาตรวจสอบจำนวน';
