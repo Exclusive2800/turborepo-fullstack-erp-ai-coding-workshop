@@ -153,11 +153,12 @@ export class StockController {
 
   /**
    * Manager stock adjustment with a mandatory reason (INV-05). Only a MANAGER reaches this handler
-   * (`@Roles('MANAGER')`); a manager is cross-store, so any store is in scope. The signed, non-zero
-   * `qtyChange` and the trimmed non-empty `reason` are validated at the contract boundary. The
-   * change is posted through the one shared `StockPostingService`, which row-locks the balance,
-   * rejects a decrease that would drive stock negative (INV-04) writing nothing, and appends an
-   * immutable ADJUSTMENT movement recording the reason, actor and timestamp.
+   * (`@Roles('MANAGER')`), and a manager is cross-store, so the `storeId` named in the request is
+   * in scope by role — there is no per-store narrowing to do here. The signed, non-zero `qtyChange`
+   * and the trimmed non-empty `reason` are validated at the contract boundary. The change is posted
+   * through the one shared `StockPostingService`, which row-locks the balance, rejects a decrease
+   * that would drive stock negative (INV-04) writing nothing, and appends an immutable ADJUSTMENT
+   * movement recording the reason, actor and timestamp.
    */
   @Roles('MANAGER')
   @Implement(contract.stock.adjust)

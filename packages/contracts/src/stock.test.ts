@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ADJUSTMENT_REASON_REQUIRED_MESSAGE } from './errors.js';
 import {
   StockAdjustInputSchema,
   StockItemSchema,
@@ -186,6 +187,22 @@ describe('StockAdjustInputSchema', () => {
       qtyChange: 5,
     });
     expect(result.success).toBe(false);
+  });
+
+  it('gives the actionable Thai message when the reason is missing or blank', () => {
+    const omitted = StockAdjustInputSchema.safeParse({
+      productId: 'p1',
+      storeId: 's1',
+      qtyChange: 5,
+    });
+    const blank = StockAdjustInputSchema.safeParse({ ...input, reason: '   ' });
+    for (const result of [omitted, blank]) {
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        const reasonIssue = result.error.issues.find((issue) => issue.path[0] === 'reason');
+        expect(reasonIssue?.message).toBe(ADJUSTMENT_REASON_REQUIRED_MESSAGE);
+      }
+    }
   });
 
   it('rejects a blank, whitespace-only reason', () => {

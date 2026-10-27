@@ -95,7 +95,11 @@ export const StockAdjustInputSchema = z.object({
     .refine((value) => value !== 0, {
       message: 'จำนวนที่ปรับต้องไม่เป็นศูนย์ กรุณาระบุจำนวนที่เพิ่มหรือลด',
     }),
-  reason: z.string().trim().min(1, { message: ADJUSTMENT_REASON_REQUIRED_MESSAGE }).max(500),
+  reason: z
+    .string({ message: ADJUSTMENT_REASON_REQUIRED_MESSAGE })
+    .trim()
+    .min(1, { message: ADJUSTMENT_REASON_REQUIRED_MESSAGE })
+    .max(500),
 });
 export type StockAdjustInput = z.infer<typeof StockAdjustInputSchema>;
 
