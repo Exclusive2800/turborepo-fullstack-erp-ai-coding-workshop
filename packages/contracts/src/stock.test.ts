@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  StockAdjustInputSchema,
   StockItemSchema,
   StockMovementListInputSchema,
   StockMovementSchema,
@@ -111,6 +112,7 @@ describe('StockMovementSchema', () => {
     balanceAfter: 10,
     type: 'OPENING',
     sourceDocument: 'OPENING',
+    reason: null,
     actorId: null,
     createdAt: new Date().toISOString(),
   };
@@ -128,6 +130,18 @@ describe('StockMovementSchema', () => {
         balanceAfter: 8,
         type: 'SALE',
         sourceDocument: 'SAL-000001',
+        actorId: 'u1',
+      }).success,
+    ).toBe(true);
+  });
+
+  it('accepts an adjustment movement carrying a reason', () => {
+    expect(
+      StockMovementSchema.safeParse({
+        ...movement,
+        type: 'ADJUSTMENT',
+        sourceDocument: 'ADJUSTMENT',
+        reason: 'นับสต็อกใหม่พบว่าของจริงมากกว่าในระบบ',
         actorId: 'u1',
       }).success,
     ).toBe(true);
@@ -151,5 +165,45 @@ describe('StockMovementListInputSchema', () => {
 
   it('rejects an unknown movement type filter', () => {
     expect(StockMovementListInputSchema.safeParse({ type: 'TRANSFER' }).success).toBe(false);
+  });
+});
+
+describe('StockAdjustInputSchema', () => {
+  const input = { productId: 'p1', storeId: 's1', qtyChange: 5, reason: 'นับสต็อกใหม่' };
+
+  it('accepts an increase with a reason', () => {
+    expect(StockAdjustInputSchema.safeParse(input).success).toBe(true);
+  });
+
+  it('accepts a decrease with a reason', () => {
+    expect(StockAdjustInputSchema.safeParse({ ...input, qtyChange: -3 }).success).toBe(true);
+  });
+
+  it('rejects a missing reason', () => {
+    const result = StockAdjustInputSchema.safeParse({
+      productId: 'p1',
+      storeId: 's1',
+      qtyChange: 5,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a blank, whitespace-only reason', () => {
+    const result = StockAdjustInputSchema.safeParse({ ...input, reason: '   ' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a zero quantity change', () => {
+    expect(StockAdjustInputSchema.safeParse({ ...input, qtyChange: 0 }).success).toBe(false);
+  });
+
+  it('rejects a fractional quantity change', () => {
+    expect(StockAdjustInputSchema.safeParse({ ...input, qtyChange: 1.5 }).success).toBe(false);
+  });
+
+  it('trims the reason', () => {
+    const result = StockAdjustInputSchema.safeParse({ ...input, reason: '  นับสต็อกใหม่  ' });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.reason).toBe('นับสต็อกใหม่');
   });
 });

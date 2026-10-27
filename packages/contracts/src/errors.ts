@@ -31,6 +31,10 @@ export const SKU_LOCKED_MESSAGE =
 export const PRODUCT_INACTIVE_MESSAGE =
   'สินค้านี้ถูกปิดการใช้งานแล้ว ไม่สามารถเพิ่มลงในเอกสารใหม่ได้ กรุณาเลือกสินค้าอื่น';
 
+/** A manager adjustment arrived without a reason (INV-05). The user must supply a reason. */
+export const ADJUSTMENT_REASON_REQUIRED_MESSAGE =
+  'กรุณาระบุเหตุผลในการปรับปรุงสต็อก เพื่อให้สามารถตรวจสอบย้อนหลังได้';
+
 /** A stock change would drive the balance below zero (INV-03/04). The user must correct the quantity. */
 export const INSUFFICIENT_STOCK_MESSAGE =
   'จำนวนสินค้าคงเหลือไม่เพียงพอ ไม่สามารถทำรายการที่ทำให้สต็อกติดลบได้ กรุณาตรวจสอบจำนวน';

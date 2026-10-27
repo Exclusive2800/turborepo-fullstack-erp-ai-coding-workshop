@@ -166,4 +166,71 @@ describe.skipIf(!databaseReachable)('StockPostingService (real Postgres)', () =>
     // Clean up this test's row (reset only clears the fixture-scoped ledger prefixes).
     await harness.prisma.issuedDocumentNumber.deleteMany({ where: { number } });
   });
+
+  // Manager adjustment over real Postgres (#6, INV-05): the posting path records the mandatory
+  // reason on the immutable movement and enforces never-negative on an over-reduction.
+  describe('manager adjustment', () => {
+    it('records the reason, actor and ADJUSTMENT type on the movement', async () => {
+      await service.post({
+        productId: fixture.productId,
+        storeId: fixture.storeId,
+        qtyChange: 10,
+        type: 'OPENING',
+        sourceDocument: 'OPENING',
+        actorId: null,
+      });
+
+      const posted = await service.post({
+        productId: fixture.productId,
+        storeId: fixture.storeId,
+        qtyChange: 5,
+        type: 'ADJUSTMENT',
+        sourceDocument: 'ADJUSTMENT',
+        reason: 'นับสต็อกใหม่พบว่าของจริงมากกว่าในระบบ',
+        actorId: fixture.userId,
+      });
+
+      expect(posted).toMatchObject({ balanceBefore: 10, balanceAfter: 15 });
+      const movement = await harness.prisma.stockMovement.findUnique({ where: { id: posted.id } });
+      expect(movement).toMatchObject({
+        type: 'ADJUSTMENT',
+        reason: 'นับสต็อกใหม่พบว่าของจริงมากกว่าในระบบ',
+        actorId: fixture.userId,
+        qtyChange: 5,
+        balanceAfter: 15,
+      });
+    });
+
+    it('rejects a decrease larger than the balance, writing no movement and leaving the balance', async () => {
+      await service.post({
+        productId: fixture.productId,
+        storeId: fixture.storeId,
+        qtyChange: 4,
+        type: 'OPENING',
+        sourceDocument: 'OPENING',
+        actorId: null,
+      });
+
+      await expect(
+        service.post({
+          productId: fixture.productId,
+          storeId: fixture.storeId,
+          qtyChange: -5,
+          type: 'ADJUSTMENT',
+          sourceDocument: 'ADJUSTMENT',
+          reason: 'ปรับลดเกินยอดคงเหลือ',
+          actorId: fixture.userId,
+        }),
+      ).rejects.toMatchObject({ code: 'CONFLICT', message: INSUFFICIENT_STOCK_MESSAGE });
+
+      const balance = await harness.prisma.stockBalance.findUnique({
+        where: { productId_storeId: { productId: fixture.productId, storeId: fixture.storeId } },
+      });
+      expect(balance?.quantity).toBe(4);
+      const adjustments = await harness.prisma.stockMovement.findMany({
+        where: { productId: fixture.productId, type: 'ADJUSTMENT' },
+      });
+      expect(adjustments).toHaveLength(0);
+    });
+  });
 });

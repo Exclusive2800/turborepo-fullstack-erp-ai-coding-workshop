@@ -39,6 +39,8 @@ export interface PostMovementInput {
   type: StockMovementType;
   /** The document that caused the change, e.g. "OPENING", "GR-000001", "SAL-000001". */
   sourceDocument: string;
+  /** The mandatory reason for a manager adjustment (INV-05); omit for every other movement kind. */
+  reason?: string | null;
   /** Who caused it. Null only for system-seeded opening balances. */
   actorId: string | null;
 }
@@ -111,6 +113,7 @@ export class StockPostingService {
         balanceAfter,
         type: input.type,
         sourceDocument: input.sourceDocument,
+        reason: input.reason ?? null,
         actorId: input.actorId,
       },
     });

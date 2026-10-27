@@ -1,5 +1,6 @@
 import { oc } from '@orpc/contract';
 import * as z from 'zod';
+import { ADJUSTMENT_REASON_REQUIRED_MESSAGE } from './errors.js';
 import { paginated, PaginationInputSchema } from './pagination.js';
 
 /**
@@ -46,8 +47,9 @@ export type StockSearchResult = z.infer<typeof StockSearchResultSchema>;
 
 /**
  * An append-only ledger row as the API exposes it (INV-02). Immutable: there is no update or
- * delete route. `actorId` is null for system-seeded opening balances. Reused by the
- * movement-history report (#19).
+ * delete route. `actorId` is null for system-seeded opening balances. `reason` carries the
+ * mandatory manager reason for an ADJUSTMENT movement (INV-05) and is null for every other kind.
+ * Reused by the movement-history report (#19).
  */
 export const StockMovementSchema = z.object({
   id: z.string(),
@@ -58,6 +60,7 @@ export const StockMovementSchema = z.object({
   balanceAfter: z.number().int().nonnegative(),
   type: StockMovementTypeSchema,
   sourceDocument: z.string(),
+  reason: z.string().nullable(),
   actorId: z.string().nullable(),
   createdAt: z.iso.datetime(),
 });
@@ -73,6 +76,28 @@ export type StockMovementListInput = z.infer<typeof StockMovementListInputSchema
 
 export const StockMovementListSchema = paginated(StockMovementSchema);
 export type StockMovementList = z.infer<typeof StockMovementListSchema>;
+
+/**
+ * A manager stock adjustment (INV-05). A MANAGER raises or lowers the on-hand quantity for one
+ * product in one store by a signed, non-zero whole `qtyChange`, with a mandatory `reason`. The
+ * reason is trimmed and must be non-empty — a blank or whitespace-only reason is rejected at the
+ * contract boundary with an actionable Thai message. A decrease larger than the available balance
+ * is rejected server-side (never-negative, INV-04), not here. The store is named explicitly
+ * because a manager is cross-store; the handler still derives scope from the authenticated
+ * principal.
+ */
+export const StockAdjustInputSchema = z.object({
+  productId: z.string().min(1),
+  storeId: z.string().min(1),
+  qtyChange: z
+    .number({ message: 'จำนวนที่ปรับต้องเป็นตัวเลข' })
+    .int({ message: 'จำนวนที่ปรับต้องเป็นจำนวนเต็ม (ไม่มีเศษทศนิยม) กรุณาแก้ไข' })
+    .refine((value) => value !== 0, {
+      message: 'จำนวนที่ปรับต้องไม่เป็นศูนย์ กรุณาระบุจำนวนที่เพิ่มหรือลด',
+    }),
+  reason: z.string().trim().min(1, { message: ADJUSTMENT_REASON_REQUIRED_MESSAGE }).max(500),
+});
+export type StockAdjustInput = z.infer<typeof StockAdjustInputSchema>;
 
 export const stockContract = {
   search: oc
@@ -93,4 +118,13 @@ export const stockContract = {
     })
     .input(StockMovementListInputSchema)
     .output(StockMovementListSchema),
+  adjust: oc
+    .route({
+      method: 'POST',
+      path: '/stock/adjustments',
+      summary: 'Manager stock adjustment (increase or decrease) with a mandatory reason',
+      tags: ['Stock'],
+    })
+    .input(StockAdjustInputSchema)
+    .output(StockMovementSchema),
 };
