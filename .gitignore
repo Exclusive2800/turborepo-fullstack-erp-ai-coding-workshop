@@ -33,3 +33,11 @@ coverage/
 .ai-review/
 docker/certs/zscaler-root-ca.crt
 docker/dev.Dockerfile
+
+# headless implementer logs (lessons/09)
+.ai-runs/
+
+# Playwright output and saved sign-ins (lessons/10)
+apps/e2e/.auth/
+apps/e2e/test-results/
+apps/e2e/playwright-report/
