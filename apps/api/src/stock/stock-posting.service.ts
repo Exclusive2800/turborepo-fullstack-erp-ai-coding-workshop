@@ -138,15 +138,18 @@ export class StockPostingService {
   }
 
   private async allocateWithin(tx: StockTxClient, prefix: string): Promise<string> {
+    // `nextValue` holds the sequence to issue next; the schema default is 1, so a counter sitting
+    // at the default (whether created here or pre-seeded elsewhere) issues 1 first. Read-and-bump
+    // atomically: create seeds the row one past the first issued number (2), update increments it.
+    // The issued sequence is `nextValue - 1`, clamped to 1 so a row left at the default 1 still
+    // issues 1 rather than 0 — the schema default and this allocator agree on the first number.
     const counter = await tx.documentCounter.upsert({
       where: { prefix },
       update: { nextValue: { increment: 1 } },
       create: { prefix, nextValue: 2 },
       select: { nextValue: true },
     });
-    // On create nextValue is seeded at 2, so the first issued sequence is 1; on update the row's
-    // post-increment value points at the next one, so subtract 1 for the number being issued.
-    const sequence = counter.nextValue - 1;
+    const sequence = Math.max(counter.nextValue - 1, 1);
     const number = `${prefix}-${String(sequence).padStart(6, '0')}`;
     // The primary key is the number: a duplicate insert is rejected by the database (P2002).
     await tx.issuedDocumentNumber.create({ data: { number, prefix } });

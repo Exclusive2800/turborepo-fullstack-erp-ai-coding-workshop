@@ -142,6 +142,19 @@ describe.skipIf(!databaseReachable)('StockPostingService (real Postgres)', () =>
     expect(second).toBe(`${prefix}-000002`);
   });
 
+  it('issues 1 first even when a counter already sits at the schema default', async () => {
+    // Guard against the default/allocator mismatch: a counter pre-seeded at the default nextValue
+    // (1) must still issue 000001 for its first allocation, never 000000.
+    const prefix = `IT-DEFAULT-${Date.now()}`;
+    await harness.prisma.documentCounter.create({ data: { prefix } });
+
+    const first = await service.allocateDocumentNumber(prefix);
+
+    expect(first).toBe(`${prefix}-000001`);
+    await harness.prisma.documentCounter.deleteMany({ where: { prefix } });
+    await harness.prisma.issuedDocumentNumber.deleteMany({ where: { prefix } });
+  });
+
   it('rejects a duplicate document number at the database', async () => {
     const number = `DUP${Date.now()}-000001`;
     await harness.prisma.issuedDocumentNumber.create({ data: { number, prefix: 'DUP' } });

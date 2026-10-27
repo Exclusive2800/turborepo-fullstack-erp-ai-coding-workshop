@@ -33,7 +33,7 @@ export type StockItem = z.infer<typeof StockItemSchema>;
 /**
  * Search stock by SKU, product name and store (INV-01). `query` matches SKU or name
  * case-insensitively; `storeId` scopes to one store. Both optional: an empty search lists every
- * balance. Paginated, newest-first by the balance's store/product.
+ * balance. Paginated and ordered by store code then SKU for a stable, scannable list.
  */
 export const StockSearchInputSchema = PaginationInputSchema.extend({
   query: z.string().trim().max(200).optional(),
