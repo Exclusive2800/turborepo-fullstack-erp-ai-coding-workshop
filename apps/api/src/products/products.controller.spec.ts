@@ -64,7 +64,7 @@ describe('ProductsController', () => {
       expect.objectContaining({ orderBy: { createdAt: 'desc' }, skip: 0, take: 20 }),
     );
     // No `where` filter — deactivated products stay in the list for historical search.
-    expect(findMany.mock.calls[0][0]).not.toHaveProperty('where');
+    expect(findMany.mock.calls[0]?.[0]).not.toHaveProperty('where');
   });
 
   it('creates a product with its per-store thresholds', async () => {
@@ -183,8 +183,6 @@ describe('ProductsController', () => {
     expect(reflector.get(ROLES_KEY, ProductsController.prototype.create)).toEqual(['ADMIN']);
     expect(reflector.get(ROLES_KEY, ProductsController.prototype.update)).toEqual(['ADMIN']);
     expect(reflector.get(ROLES_KEY, ProductsController.prototype.list)).toBeUndefined();
-    expect(
-      reflector.get(ROLES_KEY, ProductsController.prototype.checkForDocument),
-    ).toBeUndefined();
+    expect(reflector.get(ROLES_KEY, ProductsController.prototype.checkForDocument)).toBeUndefined();
   });
 });

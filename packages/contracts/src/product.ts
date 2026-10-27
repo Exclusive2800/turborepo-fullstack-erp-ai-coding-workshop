@@ -94,7 +94,12 @@ export const productContract = {
     .input(ProductCreateInputSchema)
     .output(ProductSchema),
   update: oc
-    .route({ method: 'PUT', path: '/products/{id}', summary: 'Update a product', tags: ['Products'] })
+    .route({
+      method: 'PUT',
+      path: '/products/{id}',
+      summary: 'Update a product',
+      tags: ['Products'],
+    })
     .input(ProductUpdateInputSchema)
     .output(ProductSchema),
   checkForDocument: oc

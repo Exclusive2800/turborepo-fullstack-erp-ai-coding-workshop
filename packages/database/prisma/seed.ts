@@ -20,6 +20,33 @@ const suppliers = [
   },
 ];
 
+// TOR Section 8 products: three SKUs with their selling prices. Every product gets a reorder
+// threshold of 3 in each store. Opening stock balances and PO-DEMO-001 belong to a later ticket.
+const products = [
+  {
+    sku: 'SKU001',
+    name: 'Drinking water pack of 6',
+    category: 'Beverages',
+    unit: 'pack',
+    sellingPrice: '60.00',
+  },
+  {
+    sku: 'SKU002',
+    name: 'Tissue paper',
+    category: 'Household',
+    unit: 'pack',
+    sellingPrice: '35.00',
+  },
+  {
+    sku: 'SKU003',
+    name: 'Laundry detergent',
+    category: 'Household',
+    unit: 'bag',
+    sellingPrice: '120.00',
+  },
+];
+const REORDER_THRESHOLD = 3;
+
 // The four-role model (TOR Section 2). STAFF is pinned to a store; the rest are cross-store.
 const DEMO_PASSWORD = 'password';
 const demoUsers = [
@@ -54,6 +81,36 @@ async function main() {
     });
   }
 
+  // Products with a reorder threshold of 3 in every store (TOR Section 8). Reset the thresholds
+  // to exactly the fixture on each run so the per-store set matches a fresh seed.
+  const storeIds = [...storeByCode.values()];
+  for (const product of products) {
+    const row = await prisma.product.upsert({
+      where: { sku: product.sku },
+      update: {
+        name: product.name,
+        category: product.category,
+        unit: product.unit,
+        sellingPrice: product.sellingPrice,
+      },
+      create: {
+        sku: product.sku,
+        name: product.name,
+        category: product.category,
+        unit: product.unit,
+        sellingPrice: product.sellingPrice,
+      },
+    });
+    await prisma.productStoreThreshold.deleteMany({ where: { productId: row.id } });
+    await prisma.productStoreThreshold.createMany({
+      data: storeIds.map((storeId) => ({
+        productId: row.id,
+        storeId,
+        threshold: REORDER_THRESHOLD,
+      })),
+    });
+  }
+
   const passwordHash = await hashPassword(DEMO_PASSWORD);
   for (const user of demoUsers) {
     const assignedStoreId = user.storeCode ? (storeByCode.get(user.storeCode) ?? null) : null;
@@ -79,9 +136,12 @@ async function main() {
   await prisma.supplier.deleteMany({
     where: { code: { notIn: suppliers.map((supplier) => supplier.code) } },
   });
+  await prisma.product.deleteMany({
+    where: { sku: { notIn: products.map((product) => product.sku) } },
+  });
 
   console.log(
-    `Seeded ${stores.length} stores, ${suppliers.length} suppliers and ${demoUsers.length} demo users (password: "${DEMO_PASSWORD}").`,
+    `Seeded ${stores.length} stores, ${suppliers.length} suppliers, ${products.length} products and ${demoUsers.length} demo users (password: "${DEMO_PASSWORD}").`,
   );
 }
 
