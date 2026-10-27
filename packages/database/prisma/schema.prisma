@@ -33,6 +33,8 @@ model User {
   /// The store a STAFF employee is pinned to. Null for cross-store roles (ADMIN, MANAGER, PURCHASING).
   assignedStoreId String?
   assignedStore   Store?  @relation(fields: [assignedStoreId], references: [id])
+  /// Movements this user caused (#5 ledger). Append-only; a user is never deleted while referenced.
+  movements    StockMovement[]
   createdAt    DateTime @default(now()) @db.Timestamptz(3)
   updatedAt    DateTime @updatedAt @db.Timestamptz(3)
 }
@@ -43,6 +45,8 @@ model Store {
   name       String
   users      User[]
   thresholds ProductStoreThreshold[]
+  movements  StockMovement[]
+  balances   StockBalance[]
   createdAt  DateTime @default(now()) @db.Timestamptz(3)
   updatedAt  DateTime @updatedAt @db.Timestamptz(3)
 }
@@ -75,6 +79,9 @@ model Product {
   skuLocked    Boolean  @default(false)
   /// Per-store reorder thresholds (INV low-stock). One row per store that has a threshold set.
   thresholds   ProductStoreThreshold[]
+  /// Append-only ledger of every stock change and the maintained per-store balances (#5).
+  movements    StockMovement[]
+  balances     StockBalance[]
   createdAt    DateTime @default(now()) @db.Timestamptz(3)
   updatedAt    DateTime @updatedAt @db.Timestamptz(3)
 }
@@ -92,4 +99,77 @@ model ProductStoreThreshold {
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([productId, storeId])
+}
+
+// Why a stock change happened (INV-02). An OPEN enum by design (spec #1): this release emits
+// OPENING (seeded opening balances), ADJUSTMENT (#6), GOODS_RECEIPT (#7/#9) and SALE (#13/#14);
+// deferred movement kinds (transfers, returns) can be added here without reshaping the ledger.
+enum StockMovementType {
+  OPENING
+  ADJUSTMENT
+  GOODS_RECEIPT
+  SALE
+}
+
+// The append-only stock ledger (INV-02/03). One immutable row per stock change: it records the
+// product, store, signed quantity change, the balance before and after, the movement type, the
+// source document that caused it, the actor, and when. There is no updatedAt and no handler edits
+// or deletes a row — history cannot be rewritten. `balance = opening + sum(qtyChange)` by
+// construction. Every downstream document (adjustment, goods receipt, sale) posts through here.
+model StockMovement {
+  id             String            @id @default(cuid())
+  productId      String
+  product        Product           @relation(fields: [productId], references: [id])
+  storeId        String
+  store          Store             @relation(fields: [storeId], references: [id])
+  /// Signed change applied to the balance: positive for a receipt, negative for a sale.
+  qtyChange      Int
+  /// Authoritative balance immediately before and after this movement was applied.
+  balanceBefore  Int
+  balanceAfter   Int
+  type           StockMovementType
+  /// The document that caused the change, e.g. "OPENING", a receipt or sale number. Snapshot text.
+  sourceDocument String
+  /// Who caused the movement (NULL only for system-seeded opening balances).
+  actorId        String?
+  actor          User?             @relation(fields: [actorId], references: [id])
+  createdAt      DateTime          @default(now()) @db.Timestamptz(3)
+
+  @@index([productId, storeId])
+  @@index([storeId, type])
+}
+
+// The current on-hand quantity for one product in one store (INV-01/03). Maintained transactionally
+// from StockMovement rows inside the same transaction that writes the movement; never negative.
+// One row per (product, store).
+model StockBalance {
+  id        String   @id @default(cuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id])
+  quantity  Int      @default(0)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([productId, storeId])
+}
+
+// The unique document-number mechanism (Section 4.3). `IssuedDocumentNumber` holds every number
+// ever handed out; its primary key is the number itself, so a second attempt to issue the same
+// number is rejected by the database. `DocumentCounter` is the per-prefix running count that the
+// allocator increments atomically to generate the next sequential number (e.g. GR-000001).
+// Downstream tickets (#9 goods receipts, #14 sales) allocate through the shared helper.
+model DocumentCounter {
+  prefix    String   @id
+  nextValue Int      @default(1)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+}
+
+model IssuedDocumentNumber {
+  number    String   @id
+  prefix    String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([prefix])
 }
