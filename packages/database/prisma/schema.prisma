@@ -130,6 +130,8 @@ model StockMovement {
   type           StockMovementType
   /// The document that caused the change, e.g. "OPENING", a receipt or sale number. Snapshot text.
   sourceDocument String
+  /// The mandatory manager reason for an ADJUSTMENT movement (INV-05); NULL for every other kind.
+  reason         String?
   /// Who caused the movement (NULL only for system-seeded opening balances).
   actorId        String?
   actor          User?             @relation(fields: [actorId], references: [id])

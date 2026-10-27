@@ -1,10 +1,12 @@
 import { Reflector } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
+import { INSUFFICIENT_STOCK_MESSAGE } from '@erp/contracts';
 import { call } from '@orpc/server';
 import { describe, expect, it, vi } from 'vitest';
 import { ROLES_KEY } from '../auth/auth.decorators.js';
 import { PrismaService } from '../database/prisma.service.js';
 import { StockController } from './stock.controller.js';
+import { StockPostingService } from './stock-posting.service.js';
 
 // A balance row joined to its product and store, as `search` reads it.
 function balanceRow(over: Partial<Record<string, unknown>> = {}) {
@@ -22,6 +24,7 @@ async function createController(stock: {
   stockBalance?: Record<string, unknown>;
   stockMovement?: Record<string, unknown>;
   productStoreThreshold?: Record<string, unknown>;
+  posting?: Partial<StockPostingService>;
 }) {
   const moduleRef = await Test.createTestingModule({
     controllers: [StockController],
@@ -34,10 +37,22 @@ async function createController(stock: {
           productStoreThreshold: stock.productStoreThreshold ?? {},
         },
       },
+      {
+        provide: StockPostingService,
+        useValue: stock.posting ?? {},
+      },
     ],
   }).compile();
   return moduleRef.get(StockController);
 }
+
+const manager = {
+  id: 'u-mgr',
+  email: 'manager01@erp.local',
+  name: 'Manager One',
+  role: 'MANAGER' as const,
+  assignedStoreId: null,
+};
 
 describe('StockController', () => {
   describe('search', () => {
@@ -190,7 +205,112 @@ describe('StockController', () => {
     const names = Object.getOwnPropertyNames(StockController.prototype);
     expect(names).not.toContain('update');
     expect(names).not.toContain('delete');
-    expect(names.filter((n) => n !== 'constructor').sort()).toEqual(['movements', 'search']);
+    expect(names.filter((n) => n !== 'constructor').sort()).toEqual([
+      'adjust',
+      'movements',
+      'search',
+    ]);
+  });
+
+  describe('adjust', () => {
+    it('lets a manager post an increase and returns the recorded movement', async () => {
+      const post = vi.fn().mockResolvedValue({ id: 'm9', balanceBefore: 10, balanceAfter: 15 });
+      const row = {
+        id: 'm9',
+        productId: 'p1',
+        storeId: 's1',
+        qtyChange: 5,
+        balanceBefore: 10,
+        balanceAfter: 15,
+        type: 'ADJUSTMENT',
+        sourceDocument: 'ADJUSTMENT',
+        reason: 'นับสต็อกใหม่',
+        actorId: 'u-mgr',
+        createdAt: new Date('2026-01-02T00:00:00.000Z'),
+      };
+      const findUnique = vi.fn().mockResolvedValue(row);
+      const controller = await createController({
+        stockMovement: { findUnique },
+        posting: { post } as Partial<StockPostingService>,
+      });
+
+      const result = await call(controller.adjust(manager), {
+        productId: 'p1',
+        storeId: 's1',
+        qtyChange: 5,
+        reason: 'นับสต็อกใหม่',
+      });
+
+      // The reason, actor and type are recorded on the posted movement (INV-05, INV-02).
+      expect(post).toHaveBeenCalledWith(
+        expect.objectContaining({
+          productId: 'p1',
+          storeId: 's1',
+          qtyChange: 5,
+          type: 'ADJUSTMENT',
+          reason: 'นับสต็อกใหม่',
+          actorId: 'u-mgr',
+        }),
+      );
+      expect(result).toMatchObject({
+        id: 'm9',
+        type: 'ADJUSTMENT',
+        qtyChange: 5,
+        reason: 'นับสต็อกใหม่',
+        actorId: 'u-mgr',
+        createdAt: '2026-01-02T00:00:00.000Z',
+      });
+    });
+
+    it('posts a decrease as a negative movement', async () => {
+      const post = vi.fn().mockResolvedValue({ id: 'm10', balanceBefore: 10, balanceAfter: 7 });
+      const findUnique = vi.fn().mockResolvedValue({
+        id: 'm10',
+        productId: 'p1',
+        storeId: 's1',
+        qtyChange: -3,
+        balanceBefore: 10,
+        balanceAfter: 7,
+        type: 'ADJUSTMENT',
+        sourceDocument: 'ADJUSTMENT',
+        reason: 'ของเสียหาย',
+        actorId: 'u-mgr',
+        createdAt: new Date('2026-01-02T00:00:00.000Z'),
+      });
+      const controller = await createController({
+        stockMovement: { findUnique },
+        posting: { post } as Partial<StockPostingService>,
+      });
+
+      await call(controller.adjust(manager), {
+        productId: 'p1',
+        storeId: 's1',
+        qtyChange: -3,
+        reason: 'ของเสียหาย',
+      });
+
+      expect(post).toHaveBeenCalledWith(expect.objectContaining({ qtyChange: -3 }));
+    });
+
+    it('propagates the never-negative rejection from the posting service', async () => {
+      const post = vi
+        .fn()
+        .mockRejectedValue(
+          Object.assign(new Error(INSUFFICIENT_STOCK_MESSAGE), { code: 'CONFLICT' }),
+        );
+      const controller = await createController({
+        posting: { post } as Partial<StockPostingService>,
+      });
+
+      await expect(
+        call(controller.adjust(manager), {
+          productId: 'p1',
+          storeId: 's1',
+          qtyChange: -99,
+          reason: 'ปรับลด',
+        }),
+      ).rejects.toMatchObject({ message: INSUFFICIENT_STOCK_MESSAGE });
+    });
   });
 
   // Authz: stock reads are open to any signed-in user (store employees check availability).
@@ -198,5 +318,11 @@ describe('StockController', () => {
     const reflector = new Reflector();
     expect(reflector.get(ROLES_KEY, StockController.prototype.search)).toBeUndefined();
     expect(reflector.get(ROLES_KEY, StockController.prototype.movements)).toBeUndefined();
+  });
+
+  // Authz: only a MANAGER may adjust stock (INV-05); a non-manager is rejected by the guard.
+  it('restricts the adjustment handler to MANAGER', () => {
+    const reflector = new Reflector();
+    expect(reflector.get(ROLES_KEY, StockController.prototype.adjust)).toEqual(['MANAGER']);
   });
 });
