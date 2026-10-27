@@ -59,7 +59,7 @@ test.describe('products master data', () => {
       await expect(page.getByRole('row', { name: new RegExp(product.sku) })).toBeVisible();
     }
 
-    // A negative selling price is rejected: the number input refuses to submit an invalid value,
+    // A negative selling price is rejected: the number input (min=0) refuses an invalid value,
     // so no new row appears for this SKU.
     const badPriceSku = `SKU${suffix}NEG`;
     await createProduct(page, {
@@ -72,7 +72,41 @@ test.describe('products master data', () => {
     await page.getByRole('button', { name: 'บันทึก' }).click();
     await expect(page.getByRole('row', { name: new RegExp(badPriceSku) })).toHaveCount(0);
 
-    // A duplicate SKU is rejected with an actionable Thai message.
+    // A negative reorder threshold is rejected the same way (the per-store input is min=0).
+    const badThresholdSku = `SKU${suffix}NEGT`;
+    await createProduct(page, {
+      sku: badThresholdSku,
+      name: 'จุดสั่งซื้อติดลบ',
+      category: 'ของใช้',
+      unit: 'ชิ้น',
+      price: '10.00',
+    });
+    await page
+      .getByLabel(/^จุดสั่งซื้อ /)
+      .first()
+      .fill('-1');
+    await page.getByRole('button', { name: 'บันทึก' }).click();
+    await expect(page.getByRole('row', { name: new RegExp(badThresholdSku) })).toHaveCount(0);
+
+    // A non-integer stock quantity is rejected: the quantity inputs (step=1) are whole-number
+    // only, so a fractional reorder threshold does not submit either.
+    const fractionalSku = `SKU${suffix}FRAC`;
+    await createProduct(page, {
+      sku: fractionalSku,
+      name: 'จำนวนไม่เต็ม',
+      category: 'ของใช้',
+      unit: 'ชิ้น',
+      price: '10.00',
+    });
+    await page
+      .getByLabel(/^จุดสั่งซื้อ /)
+      .first()
+      .fill('2.5');
+    await page.getByRole('button', { name: 'บันทึก' }).click();
+    await expect(page.getByRole('row', { name: new RegExp(fractionalSku) })).toHaveCount(0);
+
+    // A duplicate SKU is rejected with an actionable Thai message. Clear the threshold first so
+    // the leftover fractional value from the previous attempt doesn't block this submit.
     await createProduct(page, {
       sku: firstSku,
       name: 'ซ้ำ',
@@ -80,6 +114,10 @@ test.describe('products master data', () => {
       unit: 'แพ็ค',
       price: '10.00',
     });
+    await page
+      .getByLabel(/^จุดสั่งซื้อ /)
+      .first()
+      .fill('');
     await page.getByRole('button', { name: 'บันทึก' }).click();
     await expect(page.getByRole('alert')).toContainText('ถูกใช้งานแล้ว');
 
