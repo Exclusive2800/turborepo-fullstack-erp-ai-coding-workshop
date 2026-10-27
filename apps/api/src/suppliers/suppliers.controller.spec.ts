@@ -1,7 +1,9 @@
 import { Test } from '@nestjs/testing';
+import { Reflector } from '@nestjs/core';
 import { duplicateCodeMessage } from '@erp/contracts';
 import { call } from '@orpc/server';
 import { describe, expect, it, vi } from 'vitest';
+import { ROLES_KEY } from '../auth/auth.decorators.js';
 import { PrismaService } from '../database/prisma.service.js';
 import { SuppliersController } from './suppliers.controller.js';
 
@@ -84,5 +86,14 @@ describe('SuppliersController', () => {
         contactPhone: null,
       },
     });
+  });
+
+  // Authz: pin that the write handlers carry @Roles('ADMIN') and the read handler is open, so
+  // dropping the decorator turns this red (the global AuthGuard enforcement is in auth.guard.spec.ts).
+  it('restricts create and update to ADMIN and leaves list open', () => {
+    const reflector = new Reflector();
+    expect(reflector.get(ROLES_KEY, SuppliersController.prototype.create)).toEqual(['ADMIN']);
+    expect(reflector.get(ROLES_KEY, SuppliersController.prototype.update)).toEqual(['ADMIN']);
+    expect(reflector.get(ROLES_KEY, SuppliersController.prototype.list)).toBeUndefined();
   });
 });

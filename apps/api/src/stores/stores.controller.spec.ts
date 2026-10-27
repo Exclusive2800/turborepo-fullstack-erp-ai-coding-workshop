@@ -1,7 +1,9 @@
 import { Test } from '@nestjs/testing';
+import { Reflector } from '@nestjs/core';
 import { duplicateCodeMessage } from '@erp/contracts';
 import { call } from '@orpc/server';
 import { describe, expect, it, vi } from 'vitest';
+import { ROLES_KEY } from '../auth/auth.decorators.js';
 import { PrismaService } from '../database/prisma.service.js';
 import { isUniqueConstraintError } from '../database/prisma-errors.js';
 import { StoresController } from './stores.controller.js';
@@ -73,6 +75,16 @@ describe('StoresController', () => {
       where: { id: 's1' },
       data: { code: 'B01', name: 'Central Plaza' },
     });
+  });
+
+  // Authz: the global AuthGuard reads @Roles metadata and rejects non-admins. Pin that the
+  // write handlers carry @Roles('ADMIN') and the read handler is left open, so dropping the
+  // decorator turns this red (the guard itself is covered in auth.guard.spec.ts).
+  it('restricts create and update to ADMIN and leaves list open', () => {
+    const reflector = new Reflector();
+    expect(reflector.get(ROLES_KEY, StoresController.prototype.create)).toEqual(['ADMIN']);
+    expect(reflector.get(ROLES_KEY, StoresController.prototype.update)).toEqual(['ADMIN']);
+    expect(reflector.get(ROLES_KEY, StoresController.prototype.list)).toBeUndefined();
   });
 });
 

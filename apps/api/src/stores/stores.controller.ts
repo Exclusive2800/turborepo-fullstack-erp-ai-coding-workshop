@@ -1,9 +1,9 @@
 import { Controller } from '@nestjs/common';
-import { contract, duplicateCodeMessage } from '@erp/contracts';
-import { Implement, implement, ORPCError } from '@orpc/nest';
-import { isUniqueConstraintError } from '../database/prisma-errors.js';
-import { PrismaService } from '../database/prisma.service.js';
+import { contract } from '@erp/contracts';
+import { Implement, implement } from '@orpc/nest';
 import { Roles } from '../auth/auth.decorators.js';
+import { PrismaService } from '../database/prisma.service.js';
+import { serializeTimestamps, throwIfDuplicateCode } from '../database/serialize.js';
 
 @Controller()
 export class StoresController {
@@ -21,16 +21,7 @@ export class StoresController {
         }),
         this.prisma.store.count(),
       ]);
-      return {
-        items: rows.map((row) => ({
-          ...row,
-          createdAt: row.createdAt.toISOString(),
-          updatedAt: row.updatedAt.toISOString(),
-        })),
-        total,
-        page,
-        pageSize,
-      };
+      return { items: rows.map(serializeTimestamps), total, page, pageSize };
     });
   }
 
@@ -42,16 +33,9 @@ export class StoresController {
         const row = await this.prisma.store.create({
           data: { code: input.code, name: input.name },
         });
-        return {
-          ...row,
-          createdAt: row.createdAt.toISOString(),
-          updatedAt: row.updatedAt.toISOString(),
-        };
+        return serializeTimestamps(row);
       } catch (error) {
-        if (isUniqueConstraintError(error)) {
-          throw new ORPCError('CONFLICT', { message: duplicateCodeMessage(input.code) });
-        }
-        throw error;
+        throwIfDuplicateCode(input.code, error);
       }
     });
   }
@@ -65,16 +49,9 @@ export class StoresController {
           where: { id: input.id },
           data: { code: input.code, name: input.name },
         });
-        return {
-          ...row,
-          createdAt: row.createdAt.toISOString(),
-          updatedAt: row.updatedAt.toISOString(),
-        };
+        return serializeTimestamps(row);
       } catch (error) {
-        if (isUniqueConstraintError(error)) {
-          throw new ORPCError('CONFLICT', { message: duplicateCodeMessage(input.code) });
-        }
-        throw error;
+        throwIfDuplicateCode(input.code, error);
       }
     });
   }

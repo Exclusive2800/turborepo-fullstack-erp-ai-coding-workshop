@@ -1,24 +1,9 @@
 import { Controller } from '@nestjs/common';
-import { contract, duplicateCodeMessage, type SupplierCreateInput } from '@erp/contracts';
-import { Implement, implement, ORPCError } from '@orpc/nest';
+import { contract, type SupplierCreateInput } from '@erp/contracts';
+import { Implement, implement } from '@orpc/nest';
 import { Roles } from '../auth/auth.decorators.js';
-import { isUniqueConstraintError } from '../database/prisma-errors.js';
 import { PrismaService } from '../database/prisma.service.js';
-
-type SupplierRow = {
-  id: string;
-  code: string;
-  name: string;
-  contactName: string | null;
-  contactEmail: string | null;
-  contactPhone: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-};
-
-function serialize(row: SupplierRow) {
-  return { ...row, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString() };
-}
+import { serializeTimestamps, throwIfDuplicateCode } from '../database/serialize.js';
 
 /** Optional/empty contact fields become null so the column clears instead of storing "". */
 function contactData(input: SupplierCreateInput) {
@@ -46,7 +31,7 @@ export class SuppliersController {
         }),
         this.prisma.supplier.count(),
       ]);
-      return { items: rows.map(serialize), total, page, pageSize };
+      return { items: rows.map(serializeTimestamps), total, page, pageSize };
     });
   }
 
@@ -58,12 +43,9 @@ export class SuppliersController {
         const row = await this.prisma.supplier.create({
           data: { code: input.code, name: input.name, ...contactData(input) },
         });
-        return serialize(row);
+        return serializeTimestamps(row);
       } catch (error) {
-        if (isUniqueConstraintError(error)) {
-          throw new ORPCError('CONFLICT', { message: duplicateCodeMessage(input.code) });
-        }
-        throw error;
+        throwIfDuplicateCode(input.code, error);
       }
     });
   }
@@ -77,12 +59,9 @@ export class SuppliersController {
           where: { id: input.id },
           data: { code: input.code, name: input.name, ...contactData(input) },
         });
-        return serialize(row);
+        return serializeTimestamps(row);
       } catch (error) {
-        if (isUniqueConstraintError(error)) {
-          throw new ORPCError('CONFLICT', { message: duplicateCodeMessage(input.code) });
-        }
-        throw error;
+        throwIfDuplicateCode(input.code, error);
       }
     });
   }
