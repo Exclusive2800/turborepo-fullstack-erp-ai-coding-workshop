@@ -14,9 +14,13 @@ datasource db {
   provider = "postgresql"
 }
 
+// The TOR's four-role model (Section 2). ADMIN/Administrator, PURCHASING/Purchasing officer,
+// STAFF/Store employee, MANAGER/Manager. Role says *what*; store assignment says *where*.
 enum Role {
   ADMIN
+  PURCHASING
   STAFF
+  MANAGER
 }
 
 model User {
@@ -26,6 +30,18 @@ model User {
   /// Written by hashPassword() from @erp/database. Never returned by the API.
   passwordHash String
   role         Role     @default(STAFF)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  /// The store a STAFF employee is pinned to. Null for cross-store roles (ADMIN, MANAGER, PURCHASING).
+  assignedStoreId String?
+  assignedStore   Store?  @relation(fields: [assignedStoreId], references: [id])
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+}
+
+model Store {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  users     User[]
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 }

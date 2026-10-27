@@ -1,6 +1,6 @@
 import { Controller, Res } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { contract, type User } from '@erp/contracts';
+import { contract, type User, type Whoami } from '@erp/contracts';
 import { verifyPassword } from '@erp/database';
 import { Implement, implement, ORPCError } from '@orpc/nest';
 import type { CookieOptions, Response } from 'express';
@@ -55,5 +55,13 @@ export class AuthController {
   @Implement(contract.auth.me)
   me(@CurrentUser() user: User | undefined) {
     return implement(contract.auth.me).handler(() => ({ user: user ?? null }));
+  }
+
+  @Implement(contract.auth.whoami)
+  whoami(@CurrentUser() user: Whoami | undefined) {
+    return implement(contract.auth.whoami).handler(() => {
+      if (!user) throw new ORPCError('UNAUTHORIZED');
+      return user;
+    });
   }
 }

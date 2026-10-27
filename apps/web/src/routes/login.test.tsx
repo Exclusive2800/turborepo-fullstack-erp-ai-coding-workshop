@@ -62,9 +62,9 @@ describe('LoginPage', () => {
     mockApi({ 'GET /auth/me': { user: null } });
 
     renderLogin();
-    fireEvent.click(await screen.findByText('staff@erp.local'));
+    fireEvent.click(await screen.findByText('staff_b01@erp.local'));
 
-    expect(screen.getByLabelText('Email')).toHaveValue('staff@erp.local');
+    expect(screen.getByLabelText('Email')).toHaveValue('staff_b01@erp.local');
     expect(screen.getByLabelText('Password')).toHaveValue('password');
   });
 

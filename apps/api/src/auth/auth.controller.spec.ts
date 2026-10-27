@@ -90,4 +90,38 @@ describe('AuthController', () => {
     await expect(call(controller.me(admin), undefined)).resolves.toEqual({ user: admin });
     await expect(call(controller.me(undefined), undefined)).resolves.toEqual({ user: null });
   });
+
+  it('whoami returns a store-scoped staff caller with their assigned store', async () => {
+    const controller = await createController();
+    const staff = {
+      id: 'u2',
+      email: 'staff_b01@erp.local',
+      name: 'Staff B01',
+      role: 'STAFF' as const,
+      assignedStoreId: 'store-b01',
+    };
+
+    await expect(call(controller.whoami(staff), undefined)).resolves.toEqual(staff);
+  });
+
+  it('whoami returns a null store for a cross-store caller', async () => {
+    const controller = await createController();
+    const manager = {
+      id: 'u3',
+      email: 'manager@erp.local',
+      name: 'Manager',
+      role: 'MANAGER' as const,
+      assignedStoreId: null,
+    };
+
+    await expect(call(controller.whoami(manager), undefined)).resolves.toEqual(manager);
+  });
+
+  it('whoami rejects an anonymous caller', async () => {
+    const controller = await createController();
+
+    await expect(call(controller.whoami(undefined), undefined)).rejects.toMatchObject({
+      code: 'UNAUTHORIZED',
+    });
+  });
 });
