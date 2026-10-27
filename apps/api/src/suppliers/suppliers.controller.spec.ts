@@ -40,7 +40,9 @@ describe('SuppliersController', () => {
   });
 
   it('creates a supplier, normalising empty contact fields to null', async () => {
-    const create = vi.fn().mockResolvedValue({ ...row, contactName: null, contactEmail: null, contactPhone: null });
+    const create = vi
+      .fn()
+      .mockResolvedValue({ ...row, contactName: null, contactEmail: null, contactPhone: null });
     const controller = await createController({ create });
 
     await call(controller.create(), { code: 'SUP01', name: 'SupplyOne', contactEmail: '' });

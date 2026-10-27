@@ -44,7 +44,12 @@ export const supplierContract = {
     .input(PaginationInputSchema)
     .output(SupplierListSchema),
   create: oc
-    .route({ method: 'POST', path: '/suppliers', summary: 'Create a supplier', tags: ['Suppliers'] })
+    .route({
+      method: 'POST',
+      path: '/suppliers',
+      summary: 'Create a supplier',
+      tags: ['Suppliers'],
+    })
     .input(SupplierCreateInputSchema)
     .output(SupplierSchema),
   update: oc

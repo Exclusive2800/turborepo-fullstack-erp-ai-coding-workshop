@@ -31,7 +31,9 @@ describe('StoresController', () => {
     const result = await call(controller.list(), { page: 1, pageSize: 20 });
 
     expect(result).toEqual({
-      items: [{ ...row, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString() }],
+      items: [
+        { ...row, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString() },
+      ],
       total: 1,
       page: 1,
       pageSize: 20,
@@ -45,9 +47,9 @@ describe('StoresController', () => {
     const create = vi.fn().mockResolvedValue(row);
     const controller = await createController({ create });
 
-    await expect(call(controller.create(), { code: 'B01', name: 'Central' })).resolves.toMatchObject(
-      { id: 's1', code: 'B01' },
-    );
+    await expect(
+      call(controller.create(), { code: 'B01', name: 'Central' }),
+    ).resolves.toMatchObject({ id: 's1', code: 'B01' });
     expect(create).toHaveBeenCalledWith({ data: { code: 'B01', name: 'Central' } });
   });
 

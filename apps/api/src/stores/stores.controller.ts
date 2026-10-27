@@ -39,8 +39,14 @@ export class StoresController {
   create() {
     return implement(contract.store.create).handler(async ({ input }) => {
       try {
-        const row = await this.prisma.store.create({ data: { code: input.code, name: input.name } });
-        return { ...row, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString() };
+        const row = await this.prisma.store.create({
+          data: { code: input.code, name: input.name },
+        });
+        return {
+          ...row,
+          createdAt: row.createdAt.toISOString(),
+          updatedAt: row.updatedAt.toISOString(),
+        };
       } catch (error) {
         if (isUniqueConstraintError(error)) {
           throw new ORPCError('CONFLICT', { message: duplicateCodeMessage(input.code) });
@@ -59,7 +65,11 @@ export class StoresController {
           where: { id: input.id },
           data: { code: input.code, name: input.name },
         });
-        return { ...row, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString() };
+        return {
+          ...row,
+          createdAt: row.createdAt.toISOString(),
+          updatedAt: row.updatedAt.toISOString(),
+        };
       } catch (error) {
         if (isUniqueConstraintError(error)) {
           throw new ORPCError('CONFLICT', { message: duplicateCodeMessage(input.code) });
