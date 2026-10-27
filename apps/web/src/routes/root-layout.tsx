@@ -27,6 +27,14 @@ export function RootLayout() {
                 สต็อก
               </NavLink>
               <NavLink
+                to="/purchase-orders"
+                className={({ isActive }) =>
+                  cn('text-muted-foreground hover:text-foreground', isActive && 'text-foreground')
+                }
+              >
+                ใบสั่งซื้อ
+              </NavLink>
+              <NavLink
                 to="/stores"
                 className={({ isActive }) =>
                   cn('text-muted-foreground hover:text-foreground', isActive && 'text-foreground')
