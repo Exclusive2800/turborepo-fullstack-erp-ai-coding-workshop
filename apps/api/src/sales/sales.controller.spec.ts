@@ -1,10 +1,19 @@
 import { Reflector } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
-import { NOT_FOUND_MESSAGE, PRODUCT_INACTIVE_MESSAGE, type Whoami } from '@erp/contracts';
+import {
+  NOT_FOUND_MESSAGE,
+  PRODUCT_INACTIVE_MESSAGE,
+  SALE_IDEMPOTENCY_KEY_REUSED_MESSAGE,
+  SALE_NOT_CONFIRMABLE_MESSAGE,
+  saleInsufficientStockMessage,
+  STORE_SCOPE_FORBIDDEN_MESSAGE,
+  type Whoami,
+} from '@erp/contracts';
 import { call } from '@orpc/server';
 import { describe, expect, it, vi } from 'vitest';
 import { ROLES_KEY } from '../auth/auth.decorators.js';
 import { PrismaService } from '../database/prisma.service.js';
+import { StockPostingService } from '../stock/stock-posting.service.js';
 import { SalesController } from './sales.controller.js';
 
 const staffB01: Whoami = {
@@ -16,6 +25,9 @@ const staffB01: Whoami = {
 };
 
 const staffUnassigned: Whoami = { ...staffB01, id: 'u-floating', assignedStoreId: null };
+
+/** A STAFF user pinned to a different store (store-b02) — the store-scope outsider for confirm. */
+const staffB02: Whoami = { ...staffB01, id: 'u-staff-b02', assignedStoreId: 'store-b02' };
 
 /** Make a Decimal-like money value as Prisma returns it. */
 function money(value: number) {
@@ -42,6 +54,8 @@ function saleRow(over: Record<string, unknown> = {}) {
     storeId: 'store-b01',
     status: 'DRAFT',
     total: money(120),
+    documentNumber: null,
+    confirmedAt: null,
     lines: [lineRow()],
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
     updatedAt: new Date('2026-01-01T00:00:00.000Z'),
@@ -53,12 +67,23 @@ interface Stubs {
   product?: Record<string, unknown>;
   sale?: Record<string, unknown>;
   saleCreate?: ReturnType<typeof vi.fn>;
+  stockBalance?: Record<string, unknown>;
+  posting?: Partial<StockPostingService>;
+  /** The tx client fields the confirm transaction callback uses. */
+  tx?: Record<string, unknown>;
+  /** Override the $transaction stub (drafts assert it is never called). */
+  transaction?: ReturnType<typeof vi.fn>;
 }
 
 async function createController(stubs: Stubs = {}) {
   const saleCreate = stubs.saleCreate ?? vi.fn().mockResolvedValue(saleRow());
-  // A spy that must never be called: a draft sale opens no transaction and posts no stock.
-  const $transaction = vi.fn();
+  const txClient = {
+    sale: { update: vi.fn().mockResolvedValue({ id: 'sale1' }) },
+    ...stubs.tx,
+  };
+  // A draft sale opens no transaction and posts no stock, so the default spy records whether it ran;
+  // confirm tests pass a stub that invokes the callback with the tx client.
+  const $transaction = stubs.transaction ?? vi.fn();
   const moduleRef = await Test.createTestingModule({
     controllers: [SalesController],
     providers: [
@@ -67,12 +92,20 @@ async function createController(stubs: Stubs = {}) {
         useValue: {
           product: stubs.product ?? {},
           sale: { create: saleCreate, ...(stubs.sale ?? {}) },
+          stockBalance: stubs.stockBalance ?? {},
           $transaction,
+        },
+      },
+      {
+        provide: StockPostingService,
+        useValue: stubs.posting ?? {
+          allocateDocumentNumber: vi.fn().mockResolvedValue('SAL-000001'),
+          post: vi.fn().mockResolvedValue({ id: 'm1', balanceBefore: 10, balanceAfter: 8 }),
         },
       },
     ],
   }).compile();
-  return { controller: moduleRef.get(SalesController), saleCreate, $transaction };
+  return { controller: moduleRef.get(SalesController), saleCreate, $transaction, txClient };
 }
 
 const createInput = { lines: [{ productId: 'p1', quantity: 2 }] };
@@ -256,10 +289,282 @@ describe('SalesController', () => {
     });
   });
 
-  // Authz: only STAFF may create a sale; reads stay open to any signed-in user.
-  it('restricts create to STAFF and leaves reads open', () => {
+  // ─── #14: sale confirmation (Seam 1 — stock validation + naming, total math, replay, authz) ───
+  //
+  // Confirmation validates the latest stock for every line and rejects the whole document if any
+  // line is short, naming the affected products (AC-05); on success it posts one SALE movement per
+  // line, allocates a unique "SAL" number and transitions the sale to CONFIRMED, all in one
+  // transaction (the atomic/never-negative/concurrency guarantees are proved over real Postgres in
+  // the integration spec). A client-supplied idempotency key replays the original confirmed sale.
+  describe('confirm (Seam 1)', () => {
+    /** Current stock balances keyed by productId, as the confirm handler reads them per line. */
+    function stockBalanceStubs(balances: Record<string, number>) {
+      return {
+        findUnique: vi.fn(async (args: { where: { productId_storeId: { productId: string } } }) => {
+          const productId = args.where.productId_storeId.productId;
+          return productId in balances ? { quantity: balances[productId] } : null;
+        }),
+      };
+    }
+
+    /** A DRAFT sale for store-b01 with lines for p1 (×2 @60) and p2 (×1 @35), total 155. */
+    function draftSale(over: Record<string, unknown> = {}) {
+      return saleRow({
+        total: money(155),
+        lines: [
+          lineRow({ id: 'l1', productId: 'p1', sku: 'SKU001', quantity: 2 }),
+          lineRow({
+            id: 'l2',
+            productId: 'p2',
+            sku: 'SKU002',
+            productName: 'Tissue paper',
+            quantity: 1,
+            unitPrice: money(35),
+            lineTotal: money(35),
+          }),
+        ],
+        ...over,
+      });
+    }
+
+    const staffUser = staffB01;
+
+    it('posts one SALE movement per line, allocates a SAL number and transitions to CONFIRMED (AC-06)', async () => {
+      const allocateDocumentNumber = vi.fn().mockResolvedValue('SAL-000001');
+      const post = vi.fn().mockResolvedValue({ id: 'm1', balanceBefore: 10, balanceAfter: 8 });
+      const saleUpdate = vi.fn().mockResolvedValue({ id: 'sale1' });
+      // The post-commit re-read returns the confirmed sale with its number and timestamp.
+      const confirmedReread = draftSale({
+        status: 'CONFIRMED',
+        documentNumber: 'SAL-000001',
+        confirmedAt: new Date('2026-01-02T03:04:05.000Z'),
+      });
+      const transaction = vi.fn(async (cb: (tx: unknown) => unknown) =>
+        cb({
+          $queryRaw: vi.fn().mockResolvedValue([{ status: 'DRAFT' }]),
+          sale: { update: saleUpdate },
+        }),
+      );
+      const { controller } = await createController({
+        sale: {
+          findUnique: vi.fn().mockResolvedValueOnce(draftSale()).mockResolvedValue(confirmedReread),
+        },
+        stockBalance: stockBalanceStubs({ p1: 10, p2: 4 }),
+        posting: { allocateDocumentNumber, post } as Partial<StockPostingService>,
+        transaction,
+      });
+
+      const result = await call(controller.confirm(staffUser), { id: 'sale1' });
+
+      expect(result).toMatchObject({
+        status: 'CONFIRMED',
+        documentNumber: 'SAL-000001',
+        total: '155.00',
+      });
+      expect(allocateDocumentNumber).toHaveBeenCalledWith('SAL', expect.anything());
+      // One SALE movement per line, each a negative qtyChange into the sale's store.
+      expect(post).toHaveBeenCalledTimes(2);
+      expect(post).toHaveBeenCalledWith(
+        expect.objectContaining({
+          productId: 'p1',
+          storeId: 'store-b01',
+          qtyChange: -2,
+          type: 'SALE',
+          sourceDocument: 'SAL-000001',
+          actorId: 'u-staff-b01',
+        }),
+        expect.anything(),
+      );
+      expect(post).toHaveBeenCalledWith(
+        expect.objectContaining({ productId: 'p2', qtyChange: -1, type: 'SALE' }),
+        expect.anything(),
+      );
+      // The sale is transitioned to CONFIRMED with its number and confirmation timestamp.
+      expect(saleUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'sale1' },
+          data: expect.objectContaining({ status: 'CONFIRMED', documentNumber: 'SAL-000001' }),
+        }),
+      );
+    });
+
+    it('rejects the whole document and names the short products when stock is insufficient (AC-05)', async () => {
+      const allocateDocumentNumber = vi.fn();
+      const post = vi.fn();
+      const transaction = vi.fn();
+      const { controller } = await createController({
+        // Selling 2 of SKU001 but only 1 in stock: the line is short.
+        sale: {
+          findUnique: vi.fn().mockResolvedValue(
+            draftSale({
+              lines: [lineRow({ id: 'l1', productId: 'p1', sku: 'SKU001', quantity: 2 })],
+            }),
+          ),
+        },
+        stockBalance: stockBalanceStubs({ p1: 1 }),
+        posting: { allocateDocumentNumber, post } as Partial<StockPostingService>,
+        transaction,
+      });
+
+      await expect(call(controller.confirm(staffUser), { id: 'sale1' })).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: saleInsufficientStockMessage(['SKU001']),
+      });
+      // Nothing posted, no number allocated, no transaction opened.
+      expect(allocateDocumentNumber).not.toHaveBeenCalled();
+      expect(post).not.toHaveBeenCalled();
+      expect(transaction).not.toHaveBeenCalled();
+    });
+
+    it('names every short product, not just the first', async () => {
+      const { controller } = await createController({
+        sale: {
+          findUnique: vi.fn().mockResolvedValue(
+            draftSale({
+              lines: [
+                lineRow({ id: 'l1', productId: 'p1', sku: 'SKU001', quantity: 2 }),
+                lineRow({ id: 'l2', productId: 'p2', sku: 'SKU002', quantity: 5 }),
+              ],
+            }),
+          ),
+        },
+        // Both lines short: p1 wants 2 has 1, p2 wants 5 has 0 (no balance row).
+        stockBalance: stockBalanceStubs({ p1: 1 }),
+        transaction: vi.fn(),
+      });
+
+      await expect(call(controller.confirm(staffUser), { id: 'sale1' })).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: saleInsufficientStockMessage(['SKU001', 'SKU002']),
+      });
+    });
+
+    it('returns NOT_FOUND for a missing sale', async () => {
+      const { controller } = await createController({
+        sale: { findUnique: vi.fn().mockResolvedValue(null) },
+        transaction: vi.fn(),
+      });
+
+      await expect(call(controller.confirm(staffUser), { id: 'missing' })).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+        message: NOT_FOUND_MESSAGE,
+      });
+    });
+
+    it('rejects confirming a sale that is not a draft', async () => {
+      const post = vi.fn();
+      const transaction = vi.fn();
+      const { controller } = await createController({
+        sale: { findUnique: vi.fn().mockResolvedValue(draftSale({ status: 'CONFIRMED' })) },
+        stockBalance: stockBalanceStubs({ p1: 10, p2: 4 }),
+        posting: {
+          allocateDocumentNumber: vi.fn(),
+          post,
+        } as Partial<StockPostingService>,
+        transaction,
+      });
+
+      await expect(call(controller.confirm(staffUser), { id: 'sale1' })).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: SALE_NOT_CONFIRMABLE_MESSAGE,
+      });
+      expect(post).not.toHaveBeenCalled();
+      expect(transaction).not.toHaveBeenCalled();
+    });
+
+    it('forbids a STAFF user from confirming a sale for another store', async () => {
+      const transaction = vi.fn();
+      const { controller } = await createController({
+        sale: { findUnique: vi.fn().mockResolvedValue(draftSale({ storeId: 'store-b01' })) },
+        transaction,
+      });
+
+      await expect(call(controller.confirm(staffB02), { id: 'sale1' })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: STORE_SCOPE_FORBIDDEN_MESSAGE,
+      });
+      expect(transaction).not.toHaveBeenCalled();
+    });
+
+    it('replays the original confirmed sale for a key that already exists, writing nothing', async () => {
+      const already = draftSale({
+        status: 'CONFIRMED',
+        documentNumber: 'SAL-000001',
+        confirmedAt: new Date('2026-01-02T03:04:05.000Z'),
+        idempotencyKey: 'key-abc',
+      });
+      // The replay lookup is by key alone (the key is globally unique); the draft read is by id.
+      const findUnique = vi
+        .fn()
+        .mockImplementation(async (args: { where: Record<string, unknown> }) =>
+          'idempotencyKey' in args.where ? already : draftSale(),
+        );
+      const allocateDocumentNumber = vi.fn();
+      const post = vi.fn();
+      const transaction = vi.fn();
+      const { controller } = await createController({
+        sale: { findUnique },
+        stockBalance: stockBalanceStubs({ p1: 10, p2: 4 }),
+        posting: { allocateDocumentNumber, post } as Partial<StockPostingService>,
+        transaction,
+      });
+
+      const result = await call(controller.confirm(staffUser), {
+        id: 'sale1',
+        idempotencyKey: 'key-abc',
+      });
+
+      expect(result).toMatchObject({ status: 'CONFIRMED', documentNumber: 'SAL-000001' });
+      expect(findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { idempotencyKey: 'key-abc' } }),
+      );
+      // The replay writes nothing: no transaction, no number, no movement.
+      expect(transaction).not.toHaveBeenCalled();
+      expect(allocateDocumentNumber).not.toHaveBeenCalled();
+      expect(post).not.toHaveBeenCalled();
+    });
+
+    it('rejects an idempotency key that already belongs to a different sale, writing nothing', async () => {
+      // The key resolves to a DIFFERENT sale (id 'other-sale'), not the one being confirmed.
+      const otherSale = draftSale({
+        id: 'other-sale',
+        status: 'CONFIRMED',
+        documentNumber: 'SAL-000009',
+        idempotencyKey: 'key-shared',
+      });
+      const findUnique = vi
+        .fn()
+        .mockImplementation(async (args: { where: Record<string, unknown> }) =>
+          'idempotencyKey' in args.where ? otherSale : draftSale(),
+        );
+      const allocateDocumentNumber = vi.fn();
+      const post = vi.fn();
+      const transaction = vi.fn();
+      const { controller } = await createController({
+        sale: { findUnique },
+        stockBalance: stockBalanceStubs({ p1: 10, p2: 4 }),
+        posting: { allocateDocumentNumber, post } as Partial<StockPostingService>,
+        transaction,
+      });
+
+      await expect(
+        call(controller.confirm(staffUser), { id: 'sale1', idempotencyKey: 'key-shared' }),
+      ).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: SALE_IDEMPOTENCY_KEY_REUSED_MESSAGE,
+      });
+      // The reused key confirms nothing for the requested draft.
+      expect(transaction).not.toHaveBeenCalled();
+      expect(allocateDocumentNumber).not.toHaveBeenCalled();
+      expect(post).not.toHaveBeenCalled();
+    });
+  });
+
+  // Authz: only STAFF may create or confirm a sale; reads stay open to any signed-in user.
+  it('restricts create and confirm to STAFF and leaves reads open', () => {
     const reflector = new Reflector();
     expect(reflector.get(ROLES_KEY, SalesController.prototype.create)).toEqual(['STAFF']);
+    expect(reflector.get(ROLES_KEY, SalesController.prototype.confirm)).toEqual(['STAFF']);
     expect(reflector.get(ROLES_KEY, SalesController.prototype.list)).toBeUndefined();
     expect(reflector.get(ROLES_KEY, SalesController.prototype.get)).toBeUndefined();
   });
