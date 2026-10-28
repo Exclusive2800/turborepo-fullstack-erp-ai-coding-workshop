@@ -2,6 +2,7 @@ import { oc } from '@orpc/contract';
 import { DateTime } from 'luxon';
 import * as z from 'zod';
 import { REPORT_DATE_RANGE_INVALID_MESSAGE } from './errors.js';
+import { StockItemSchema } from './stock.js';
 
 /**
  * The reporting time zone (TOR Section 2, 6.2). Every reporting-day boundary is computed in
@@ -82,6 +83,65 @@ export const DailySalesReportSchema = z.object({
 });
 export type DailySalesReport = z.infer<typeof DailySalesReportSchema>;
 
+/**
+ * Stock-on-hand report filters (RPT-02, user story 47). `storeId` is optional — omitted reports
+ * every store (a cross-store user); given, it scopes to that store. `query` matches SKU or product
+ * name case-insensitively. Zero-stock products that match the filters stay visible — nothing is
+ * hidden for having a balance of zero. The report is a read-only view of the maintained per-store
+ * `StockBalance` rows (#5), carrying each product's per-store reorder threshold and low-stock flag.
+ */
+export const StockOnHandReportInputSchema = z.object({
+  storeId: z.string().min(1).optional(),
+  query: z.string().trim().max(200).optional(),
+});
+export type StockOnHandReportInput = z.infer<typeof StockOnHandReportInputSchema>;
+
+/**
+ * The stock-on-hand report result (RPT-02). A flat list of per-store on-hand rows — one product in
+ * one store with its quantity, unit, per-store reorder threshold and low-stock flag — ordered by
+ * store code then SKU for a stable, scannable list. `total` echoes the row count. When nothing
+ * matches the filters the list is empty and `total` is 0 — the empty state the screen renders with
+ * a Thai message. The row shape is the shared {@link StockItemSchema} (INV-01), so the report and
+ * the stock-search screen agree on what an on-hand row is.
+ */
+export const StockOnHandReportSchema = z.object({
+  /** Echo of the store filter the rows were computed for (`null` for all stores). */
+  storeId: z.string().nullable(),
+  items: z.array(StockItemSchema),
+  /** Count of rows in the report. */
+  total: z.number().int().nonnegative(),
+});
+export type StockOnHandReport = z.infer<typeof StockOnHandReportSchema>;
+
+/**
+ * Low-stock report filters (RPT-02, AC-08 low-stock half). `storeId` is REQUIRED — low stock is
+ * defined against the per-store reorder threshold, so the report always runs for one named store.
+ * `query` matches SKU or product name case-insensitively. A product is low-stock when its on-hand
+ * balance is AT OR BELOW its reorder threshold for that store (`quantity <= threshold`); a product
+ * with no balance row is treated as zero on-hand, so SKU003 at balance 0 with threshold 3 is
+ * low-stock because 0 ≤ 3.
+ */
+export const LowStockReportInputSchema = z.object({
+  storeId: z.string().min(1),
+  query: z.string().trim().max(200).optional(),
+});
+export type LowStockReportInput = z.infer<typeof LowStockReportInputSchema>;
+
+/**
+ * The low-stock report result (RPT-02, AC-08 low-stock half). The same per-store on-hand row shape
+ * as the stock-on-hand report, but containing ONLY the rows that are low-stock (`quantity <=
+ * reorderThreshold`), ordered by store code then SKU. Every returned row's `lowStock` is `true`.
+ * When nothing is low-stock the list is empty and `total` is 0 — the empty state the screen renders.
+ */
+export const LowStockReportSchema = z.object({
+  /** Echo of the store the low-stock rows were computed for. */
+  storeId: z.string(),
+  items: z.array(StockItemSchema),
+  /** Count of low-stock rows. */
+  total: z.number().int().nonnegative(),
+});
+export type LowStockReport = z.infer<typeof LowStockReportSchema>;
+
 export const reportContract = {
   dailySales: oc
     .route({
@@ -93,4 +153,24 @@ export const reportContract = {
     })
     .input(DailySalesReportInputSchema)
     .output(DailySalesReportSchema),
+  stockOnHand: oc
+    .route({
+      method: 'GET',
+      path: '/reports/stock-on-hand',
+      summary:
+        'Stock-on-hand report by store with product search; zero-stock matches stay visible (RPT-02)',
+      tags: ['Reports'],
+    })
+    .input(StockOnHandReportInputSchema)
+    .output(StockOnHandReportSchema),
+  lowStock: oc
+    .route({
+      method: 'GET',
+      path: '/reports/low-stock',
+      summary:
+        'Low-stock report for a store: products whose on-hand is at or below their reorder threshold (RPT-02, AC-08)',
+      tags: ['Reports'],
+    })
+    .input(LowStockReportInputSchema)
+    .output(LowStockReportSchema),
 };

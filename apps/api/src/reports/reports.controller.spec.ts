@@ -17,6 +17,10 @@ interface Stubs {
   aggregate?: ReturnType<typeof vi.fn>;
   /** saleLine.aggregate result: _sum.quantity. */
   lineAggregate?: ReturnType<typeof vi.fn>;
+  /** stockBalance.findMany result: the on-hand rows. */
+  balanceFindMany?: ReturnType<typeof vi.fn>;
+  /** productStoreThreshold.findMany result: the per-store thresholds. */
+  thresholdFindMany?: ReturnType<typeof vi.fn>;
 }
 
 async function createController(stubs: Stubs = {}) {
@@ -24,6 +28,8 @@ async function createController(stubs: Stubs = {}) {
     stubs.aggregate ?? vi.fn().mockResolvedValue({ _count: { _all: 0 }, _sum: { total: null } });
   const lineAggregate =
     stubs.lineAggregate ?? vi.fn().mockResolvedValue({ _sum: { quantity: null } });
+  const balanceFindMany = stubs.balanceFindMany ?? vi.fn().mockResolvedValue([]);
+  const thresholdFindMany = stubs.thresholdFindMany ?? vi.fn().mockResolvedValue([]);
   const moduleRef = await Test.createTestingModule({
     controllers: [ReportsController],
     providers: [
@@ -32,11 +38,30 @@ async function createController(stubs: Stubs = {}) {
         useValue: {
           sale: { aggregate },
           saleLine: { aggregate: lineAggregate },
+          stockBalance: { findMany: balanceFindMany },
+          productStoreThreshold: { findMany: thresholdFindMany },
         },
       },
     ],
   }).compile();
-  return { controller: moduleRef.get(ReportsController), aggregate, lineAggregate };
+  return {
+    controller: moduleRef.get(ReportsController),
+    aggregate,
+    lineAggregate,
+    balanceFindMany,
+    thresholdFindMany,
+  };
+}
+
+/** A stockBalance row as Prisma returns it with the product/store fields the report joins. */
+function balanceRow(
+  productId: string,
+  storeId: string,
+  quantity: number,
+  product: { sku: string; name: string; unit: string },
+  storeCode: string,
+) {
+  return { productId, storeId, quantity, product, store: { code: storeCode } };
 }
 
 describe('ReportsController', () => {
@@ -132,5 +157,188 @@ describe('ReportsController', () => {
   it('restricts the daily sales report to MANAGER', () => {
     const reflector = new Reflector();
     expect(reflector.get(ROLES_KEY, ReportsController.prototype.dailySales)).toEqual(['MANAGER']);
+  });
+
+  describe('stockOnHand (Seam 1)', () => {
+    const waterProduct = { sku: 'SKU001', name: 'Water', unit: 'pack' };
+    const detergentProduct = { sku: 'SKU003', name: 'Detergent', unit: 'bag' };
+
+    it('returns per-store on-hand rows with threshold and low-stock flag, keeping zero-stock matches visible', async () => {
+      const balanceFindMany = vi
+        .fn()
+        .mockResolvedValue([
+          balanceRow('p1', 's1', 10, waterProduct, 'B01'),
+          balanceRow('p3', 's1', 0, detergentProduct, 'B01'),
+        ]);
+      const thresholdFindMany = vi.fn().mockResolvedValue([
+        { productId: 'p1', storeId: 's1', threshold: 3 },
+        { productId: 'p3', storeId: 's1', threshold: 3 },
+      ]);
+      const { controller } = await createController({ balanceFindMany, thresholdFindMany });
+
+      const result = await call(controller.stockOnHand(), { storeId: 's1', query: 'SK' });
+
+      expect(result.storeId).toBe('s1');
+      expect(result.total).toBe(2);
+      // The zero-stock detergent row is present and flagged low-stock (0 <= 3); water is not.
+      expect(result.items).toEqual([
+        {
+          productId: 'p1',
+          sku: 'SKU001',
+          name: 'Water',
+          unit: 'pack',
+          storeId: 's1',
+          storeCode: 'B01',
+          quantity: 10,
+          reorderThreshold: 3,
+          lowStock: false,
+        },
+        {
+          productId: 'p3',
+          sku: 'SKU003',
+          name: 'Detergent',
+          unit: 'bag',
+          storeId: 's1',
+          storeCode: 'B01',
+          quantity: 0,
+          reorderThreshold: 3,
+          lowStock: true,
+        },
+      ]);
+    });
+
+    it('scopes the balance query to the store and matches SKU or name case-insensitively', async () => {
+      const balanceFindMany = vi.fn().mockResolvedValue([]);
+      const { controller } = await createController({ balanceFindMany });
+
+      await call(controller.stockOnHand(), { storeId: 's1', query: 'water' });
+
+      const where = balanceFindMany.mock.calls[0]?.[0]?.where;
+      expect(where.storeId).toBe('s1');
+      expect(where.product.OR).toEqual([
+        { sku: { contains: 'water', mode: 'insensitive' } },
+        { name: { contains: 'water', mode: 'insensitive' } },
+      ]);
+    });
+
+    it('reports across all stores when no storeId is given (no store filter)', async () => {
+      const balanceFindMany = vi.fn().mockResolvedValue([]);
+      const { controller } = await createController({ balanceFindMany });
+
+      const result = await call(controller.stockOnHand(), {});
+
+      expect(result.storeId).toBeNull();
+      const where = balanceFindMany.mock.calls[0]?.[0]?.where;
+      expect(where).not.toHaveProperty('storeId');
+    });
+
+    it('treats a row with no threshold as not low-stock (null threshold)', async () => {
+      const balanceFindMany = vi
+        .fn()
+        .mockResolvedValue([balanceRow('p1', 's1', 0, waterProduct, 'B01')]);
+      const thresholdFindMany = vi.fn().mockResolvedValue([]);
+      const { controller } = await createController({ balanceFindMany, thresholdFindMany });
+
+      const result = await call(controller.stockOnHand(), { storeId: 's1' });
+
+      expect(result.items[0]).toMatchObject({ reorderThreshold: null, lowStock: false });
+    });
+
+    it('returns an empty list when nothing matches (AC-08 empty state)', async () => {
+      const { controller } = await createController();
+
+      const result = await call(controller.stockOnHand(), { storeId: 's2', query: 'ZZZ' });
+
+      expect(result).toEqual({ storeId: 's2', items: [], total: 0 });
+    });
+  });
+
+  describe('lowStock (Seam 1)', () => {
+    const waterProduct = { sku: 'SKU001', name: 'Water', unit: 'pack' };
+    const detergentProduct = { sku: 'SKU003', name: 'Detergent', unit: 'bag' };
+
+    it('returns only rows at or below threshold; SKU003 at balance 0, threshold 3 appears (0 ≤ 3)', async () => {
+      const balanceFindMany = vi.fn().mockResolvedValue([
+        balanceRow('p1', 's1', 10, waterProduct, 'B01'), // above threshold → excluded
+        balanceRow('p3', 's1', 0, detergentProduct, 'B01'), // 0 ≤ 3 → included
+      ]);
+      const thresholdFindMany = vi.fn().mockResolvedValue([
+        { productId: 'p1', storeId: 's1', threshold: 3 },
+        { productId: 'p3', storeId: 's1', threshold: 3 },
+      ]);
+      const { controller } = await createController({ balanceFindMany, thresholdFindMany });
+
+      const result = await call(controller.lowStock(), { storeId: 's1' });
+
+      expect(result.storeId).toBe('s1');
+      expect(result.total).toBe(1);
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0]).toMatchObject({
+        sku: 'SKU003',
+        quantity: 0,
+        reorderThreshold: 3,
+        lowStock: true,
+      });
+    });
+
+    it('includes a product exactly at threshold and excludes one just above', async () => {
+      const balanceFindMany = vi.fn().mockResolvedValue([
+        balanceRow('p1', 's1', 3, waterProduct, 'B01'), // exactly at threshold → low-stock
+        balanceRow('p3', 's1', 4, detergentProduct, 'B01'), // just above → not low-stock
+      ]);
+      const thresholdFindMany = vi.fn().mockResolvedValue([
+        { productId: 'p1', storeId: 's1', threshold: 3 },
+        { productId: 'p3', storeId: 's1', threshold: 3 },
+      ]);
+      const { controller } = await createController({ balanceFindMany, thresholdFindMany });
+
+      const result = await call(controller.lowStock(), { storeId: 's1' });
+
+      expect(result.items.map((i) => i.sku)).toEqual(['SKU001']);
+    });
+
+    it('excludes a product with no threshold for the store', async () => {
+      const balanceFindMany = vi
+        .fn()
+        .mockResolvedValue([balanceRow('p1', 's1', 0, waterProduct, 'B01')]);
+      const thresholdFindMany = vi.fn().mockResolvedValue([]);
+      const { controller } = await createController({ balanceFindMany, thresholdFindMany });
+
+      const result = await call(controller.lowStock(), { storeId: 's1' });
+
+      expect(result.items).toEqual([]);
+      expect(result.total).toBe(0);
+    });
+
+    it('scopes the balance query to the required store', async () => {
+      const balanceFindMany = vi.fn().mockResolvedValue([]);
+      const { controller } = await createController({ balanceFindMany });
+
+      await call(controller.lowStock(), { storeId: 's1', query: 'SKU' });
+
+      const where = balanceFindMany.mock.calls[0]?.[0]?.where;
+      expect(where.storeId).toBe('s1');
+    });
+
+    it('returns an empty list when nothing is low-stock (AC-08 empty state)', async () => {
+      const balanceFindMany = vi
+        .fn()
+        .mockResolvedValue([balanceRow('p1', 's1', 10, waterProduct, 'B01')]);
+      const thresholdFindMany = vi
+        .fn()
+        .mockResolvedValue([{ productId: 'p1', storeId: 's1', threshold: 3 }]);
+      const { controller } = await createController({ balanceFindMany, thresholdFindMany });
+
+      const result = await call(controller.lowStock(), { storeId: 's1' });
+
+      expect(result).toEqual({ storeId: 's1', items: [], total: 0 });
+    });
+  });
+
+  // Authz: the stock reports are open to any permitted user (RPT-02, user story 47) — no @Roles.
+  it('leaves the stock-on-hand and low-stock reports open to any signed-in user', () => {
+    const reflector = new Reflector();
+    expect(reflector.get(ROLES_KEY, ReportsController.prototype.stockOnHand)).toBeUndefined();
+    expect(reflector.get(ROLES_KEY, ReportsController.prototype.lowStock)).toBeUndefined();
   });
 });

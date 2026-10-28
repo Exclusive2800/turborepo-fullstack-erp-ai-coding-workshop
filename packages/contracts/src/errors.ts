@@ -137,6 +137,22 @@ export const REPORT_DATE_RANGE_INVALID_MESSAGE =
  */
 export const REPORT_NO_SALES_MESSAGE = 'ไม่มียอดขายที่ยืนยันแล้วในช่วงวันที่และสาขาที่เลือก';
 
+/**
+ * The empty-state message the stock-on-hand report shows when no product matches the chosen store
+ * and search (RPT-02, user story 47). It tells the user the report ran and found nothing, not that
+ * it failed — try a different store or search term.
+ */
+export const REPORT_NO_STOCK_MESSAGE =
+  'ไม่พบสินค้าที่ตรงกับสาขาและคำค้นหาที่เลือก กรุณาปรับคำค้นหาหรือเลือกสาขาอื่น';
+
+/**
+ * The empty-state message the low-stock report shows when nothing is at or below its reorder
+ * threshold for the chosen store (RPT-02, AC-08 low-stock half). It tells the user stock is healthy
+ * for that store, not that the report failed.
+ */
+export const REPORT_NO_LOW_STOCK_MESSAGE =
+  'ไม่มีสินค้าที่ใกล้หมดในสาขาที่เลือก สต็อกอยู่ในระดับปกติ';
+
 /** A store-scoped user acted for a store that is not theirs. The user cannot retry; it is forbidden. */
 export const STORE_SCOPE_FORBIDDEN_MESSAGE =
   'คุณไม่มีสิทธิ์ทำรายการสำหรับสาขานี้ กรุณาทำรายการเฉพาะสาขาที่คุณได้รับมอบหมาย';
