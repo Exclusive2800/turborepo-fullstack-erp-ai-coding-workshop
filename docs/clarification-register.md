@@ -42,7 +42,9 @@ already-approved commitment is accepted under that same authority.
   the status advance over a real database after the product is deactivated.
 - Complementary half (deactivated product still rejected on a _new_ document) —
   `apps/api/src/purchase-orders/purchase-orders.controller.spec.ts`: _"rejects a deactivated
-  product with the actionable Thai message"_ (`PRODUCT_INACTIVE_MESSAGE`).
+  product with the actionable Thai message"_ (`PRODUCT_INACTIVE_MESSAGE`), and
+  `apps/api/src/sales/sales.controller.spec.ts`: _"rejects a deactivated product with the actionable
+  Thai message"_ — the sale side of the same MD-02 boundary.
 - Demo (Playwright) — `apps/e2e/tests/goods-receipt-deactivated-product.e2e.ts`: deactivate the
   product after its PO is approved, then staff_b01 receives against the approved line and store
   stock increases.
