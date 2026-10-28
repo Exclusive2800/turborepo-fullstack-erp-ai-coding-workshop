@@ -80,9 +80,17 @@ const createInput = { lines: [{ productId: 'p1', quantity: 2 }] };
 describe('SalesController', () => {
   describe('create', () => {
     it('creates a DRAFT sale for the staff user’s assigned store, derived from the principal', async () => {
-      const findMany = vi.fn().mockResolvedValue([
-        { id: 'p1', sku: 'SKU001', name: 'Drinking water pack of 6', active: true, sellingPrice: money(60) },
-      ]);
+      const findMany = vi
+        .fn()
+        .mockResolvedValue([
+          {
+            id: 'p1',
+            sku: 'SKU001',
+            name: 'Drinking water pack of 6',
+            active: true,
+            sellingPrice: money(60),
+          },
+        ]);
       const { controller, saleCreate } = await createController({ product: { findMany } });
 
       const result = await call(controller.create(staffB01), createInput);
@@ -102,7 +110,13 @@ describe('SalesController', () => {
 
     it('snapshots the current selling price onto each line and ignores any client price override', async () => {
       const findMany = vi.fn().mockResolvedValue([
-        { id: 'p1', sku: 'SKU001', name: 'Drinking water pack of 6', active: true, sellingPrice: money(60) },
+        {
+          id: 'p1',
+          sku: 'SKU001',
+          name: 'Drinking water pack of 6',
+          active: true,
+          sellingPrice: money(60),
+        },
         { id: 'p2', sku: 'SKU002', name: 'Tissue paper', active: true, sellingPrice: money(35) },
       ]);
       const { controller, saleCreate } = await createController({ product: { findMany } });
@@ -140,9 +154,17 @@ describe('SalesController', () => {
     });
 
     it('writes no stock movement and opens no transaction for a draft sale (SAL-03)', async () => {
-      const findMany = vi.fn().mockResolvedValue([
-        { id: 'p1', sku: 'SKU001', name: 'Drinking water pack of 6', active: true, sellingPrice: money(60) },
-      ]);
+      const findMany = vi
+        .fn()
+        .mockResolvedValue([
+          {
+            id: 'p1',
+            sku: 'SKU001',
+            name: 'Drinking water pack of 6',
+            active: true,
+            sellingPrice: money(60),
+          },
+        ]);
       const { controller, $transaction } = await createController({ product: { findMany } });
 
       await call(controller.create(staffB01), createInput);
@@ -155,7 +177,9 @@ describe('SalesController', () => {
     it('rejects a deactivated product with the actionable Thai message', async () => {
       const findMany = vi
         .fn()
-        .mockResolvedValue([{ id: 'p1', sku: 'SKU001', name: 'Old water', active: false, sellingPrice: money(60) }]);
+        .mockResolvedValue([
+          { id: 'p1', sku: 'SKU001', name: 'Old water', active: false, sellingPrice: money(60) },
+        ]);
       const { controller, saleCreate } = await createController({ product: { findMany } });
 
       await expect(call(controller.create(staffB01), createInput)).rejects.toMatchObject({
@@ -176,9 +200,17 @@ describe('SalesController', () => {
     });
 
     it('rejects a staff user who is not assigned to any store (cannot derive a store)', async () => {
-      const findMany = vi.fn().mockResolvedValue([
-        { id: 'p1', sku: 'SKU001', name: 'Drinking water pack of 6', active: true, sellingPrice: money(60) },
-      ]);
+      const findMany = vi
+        .fn()
+        .mockResolvedValue([
+          {
+            id: 'p1',
+            sku: 'SKU001',
+            name: 'Drinking water pack of 6',
+            active: true,
+            sellingPrice: money(60),
+          },
+        ]);
       const { controller, saleCreate } = await createController({ product: { findMany } });
 
       await expect(call(controller.create(staffUnassigned), createInput)).rejects.toMatchObject({
@@ -196,7 +228,11 @@ describe('SalesController', () => {
       const result = await call(controller.get(), { id: 'sale1' });
 
       expect(result).toMatchObject({ id: 'sale1', status: 'DRAFT', storeId: 'store-b01' });
-      expect(result.lines[0]).toMatchObject({ sku: 'SKU001', unitPrice: '60.00', lineTotal: '120.00' });
+      expect(result.lines[0]).toMatchObject({
+        sku: 'SKU001',
+        unitPrice: '60.00',
+        lineTotal: '120.00',
+      });
     });
 
     it('returns NOT_FOUND for a missing sale', async () => {
