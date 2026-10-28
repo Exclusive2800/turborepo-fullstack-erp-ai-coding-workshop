@@ -1,4 +1,6 @@
 import {
+  INSUFFICIENT_STOCK_MESSAGE,
+  type Sale,
   saleInsufficientStockMessage,
   SALE_NOT_CONFIRMABLE_MESSAGE,
   type Whoami,
@@ -347,6 +349,56 @@ describe.skipIf(!databaseReachable)('SalesController confirm (real Postgres)', (
     expect(secondReread?.status).toBe('DRAFT');
     expect(await s.balance(s.product2Id)).toBe(5);
     expect(await s.saleMovements(s.product2Id)).toBe(0);
+  });
+
+  // Concurrency exactly-one-wins (SAL-03, INV-04, AC-07 — #15 PRIMARY, the Demo line). Two SEPARATE
+  // drafts, each selling 7 of SKU001 against an opening of 10, are confirmed in parallel. Unlike two
+  // confirms of one draft (serialized by the sale-row FOR UPDATE above), these contend only on the
+  // product's balance row: the posting service locks it with `SELECT ... FOR UPDATE` and re-reads
+  // the authoritative balance before deducting, so the second to acquire the lock sees 3 remaining
+  // and is rejected (7 > 3) by the binding never-negative guard — NOT the friendly pre-transaction
+  // check, which both drafts passed while the balance still read 10. This is the point of the lock:
+  // the browser-shown balance (10 for both) is never trusted. Exactly one confirms, the loser is
+  // rejected as insufficient stock, the final balance is 3, and exactly one sale and one SALE
+  // movement are written.
+  it('two concurrent 7-unit sales of SKU001 at stock 10 resolve to one confirmed and one rejected, final stock 3 (AC-07)', async () => {
+    const s = await seedScenario(10, 5);
+    const draftA = await seedDraftSale(s, [{ productId: s.product1Id, quantity: 7 }]);
+    const draftB = await seedDraftSale(s, [{ productId: s.product1Id, quantity: 7 }]);
+
+    const results = await Promise.allSettled([
+      call(controller.confirm(s.staffUser), { id: draftA, idempotencyKey: `idem-${randomUUID()}` }),
+      call(controller.confirm(s.staffUser), { id: draftB, idempotencyKey: `idem-${randomUUID()}` }),
+    ]);
+
+    const fulfilled = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected');
+
+    // Exactly one of the two oversubscribing sales won; the other was rejected for insufficient
+    // stock by the authoritative never-negative guard under the balance-row lock (both drafts
+    // passed the pre-check while stock still read 10, so the loser trips the binding guard, not the
+    // friendly SKU-naming pre-check).
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    const loser = rejected[0] as PromiseRejectedResult;
+    expect(loser.reason).toMatchObject({
+      code: 'CONFLICT',
+      message: INSUFFICIENT_STOCK_MESSAGE,
+    });
+
+    // The winning sale is CONFIRMED with a SAL number; the loser stays DRAFT and never deducted.
+    const winner = (fulfilled[0] as PromiseFulfilledResult<Sale>).value;
+    expect(winner.status).toBe('CONFIRMED');
+    expect(winner.documentNumber).toMatch(/^SAL-/);
+    const winnerId = winner.id;
+    const loserId = winnerId === draftA ? draftB : draftA;
+    const loserRow = await harness.prisma.sale.findUnique({ where: { id: loserId } });
+    expect(loserRow?.status).toBe('DRAFT');
+    expect(loserRow?.documentNumber).toBeNull();
+
+    // Final stock is 10 − 7 = 3, deducted exactly once; exactly one SALE movement exists.
+    expect(await s.balance(s.product1Id)).toBe(3);
+    expect(await s.saleMovements(s.product1Id)).toBe(1);
   });
 
   // Never-negative under exact-boundary selling: selling exactly the opening quantity succeeds and
