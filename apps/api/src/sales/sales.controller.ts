@@ -4,6 +4,7 @@ import {
   NOT_FOUND_MESSAGE,
   PRODUCT_INACTIVE_MESSAGE,
   type Sale,
+  SALE_IDEMPOTENCY_KEY_REUSED_MESSAGE,
   SALE_NOT_CONFIRMABLE_MESSAGE,
   type SaleLine,
   saleInsufficientStockMessage,
@@ -216,12 +217,19 @@ export class SalesController {
   @Implement(contract.sale.confirm)
   confirm(@CurrentUser() user: Whoami) {
     return implement(contract.sale.confirm).handler(async ({ input }) => {
-      // Idempotency replay (fast path): a key that already has a sale returns that sale untouched,
-      // before the draft is loaded or any movement posted. The key is globally unique, so it maps to
-      // exactly one sale regardless of order.
+      // Idempotency replay (fast path): a key that already has a sale resolves to exactly one sale
+      // (the key is globally unique). If that sale is the one being confirmed, return it untouched —
+      // a retry posts nothing. If the key already belongs to a DIFFERENT sale, it has been reused;
+      // replaying it would return the wrong document, so reject with an actionable message rather
+      // than silently confirming the wrong sale.
       if (input.idempotencyKey) {
         const replay = await this.findSaleByKey(input.idempotencyKey);
-        if (replay) return replay;
+        if (replay) {
+          if (replay.id !== input.id) {
+            throw new ORPCError('CONFLICT', { message: SALE_IDEMPOTENCY_KEY_REUSED_MESSAGE });
+          }
+          return serializeSale(replay);
+        }
       }
 
       const sale = (await this.prisma.sale.findUnique({
@@ -328,12 +336,18 @@ export class SalesController {
           throw new ORPCError('CONFLICT', { message: SALE_NOT_CONFIRMABLE_MESSAGE });
         }
       } catch (error) {
-        // Belt-and-braces: if a key race still surfaced a unique-constraint violation, replay the
-        // winner. The whole transaction (number, movements, status) rolled back, so nothing was
-        // deducted twice.
+        // Belt-and-braces: a unique-constraint violation on the key means another sale already holds
+        // it. If that sale is this one, replay it (the whole transaction rolled back, so nothing was
+        // deducted twice); if it is a different sale, the key was reused — reject rather than return
+        // the wrong document.
         if (input.idempotencyKey && isUniqueConstraintError(error)) {
           const replay = await this.findSaleByKey(input.idempotencyKey);
-          if (replay) return replay;
+          if (replay) {
+            if (replay.id !== input.id) {
+              throw new ORPCError('CONFLICT', { message: SALE_IDEMPOTENCY_KEY_REUSED_MESSAGE });
+            }
+            return serializeSale(replay);
+          }
         }
         throw error;
       }
@@ -350,16 +364,17 @@ export class SalesController {
   }
 
   /**
-   * Look up a confirmed sale by its idempotency key (#14), or null if there is none yet. The key is
-   * globally UNIQUE on `Sale` (the mechanism reused from goods receipt #11), so a key identifies
-   * exactly one sale. Used both for the pre-transaction replay fast path and to resolve a concurrent
-   * P2002 loser back to the winner's sale, so a replay is byte-for-byte the original response.
+   * Look up the stored sale that holds an idempotency key (#14), or null if there is none yet. The
+   * key is globally UNIQUE on `Sale` (the mechanism reused from goods receipt #11), so a key
+   * identifies exactly one sale. Callers compare the returned sale's `id` to the sale they intend to
+   * confirm: an equal id is a genuine replay; a different id means the key was reused against another
+   * sale and must be rejected rather than returned. Returns the row (with lines) so a replay is
+   * byte-for-byte the original response once serialized.
    */
-  private async findSaleByKey(idempotencyKey: string): Promise<Sale | null> {
-    const row = (await this.prisma.sale.findUnique({
+  private async findSaleByKey(idempotencyKey: string): Promise<SaleRow | null> {
+    return (await this.prisma.sale.findUnique({
       where: { idempotencyKey },
       include: { lines: true },
     })) as SaleRow | null;
-    return row ? serializeSale(row) : null;
   }
 }

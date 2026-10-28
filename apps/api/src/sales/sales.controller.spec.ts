@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import {
   NOT_FOUND_MESSAGE,
   PRODUCT_INACTIVE_MESSAGE,
+  SALE_IDEMPOTENCY_KEY_REUSED_MESSAGE,
   SALE_NOT_CONFIRMABLE_MESSAGE,
   saleInsufficientStockMessage,
   STORE_SCOPE_FORBIDDEN_MESSAGE,
@@ -518,6 +519,41 @@ describe('SalesController', () => {
         expect.objectContaining({ where: { idempotencyKey: 'key-abc' } }),
       );
       // The replay writes nothing: no transaction, no number, no movement.
+      expect(transaction).not.toHaveBeenCalled();
+      expect(allocateDocumentNumber).not.toHaveBeenCalled();
+      expect(post).not.toHaveBeenCalled();
+    });
+
+    it('rejects an idempotency key that already belongs to a different sale, writing nothing', async () => {
+      // The key resolves to a DIFFERENT sale (id 'other-sale'), not the one being confirmed.
+      const otherSale = draftSale({
+        id: 'other-sale',
+        status: 'CONFIRMED',
+        documentNumber: 'SAL-000009',
+        idempotencyKey: 'key-shared',
+      });
+      const findUnique = vi
+        .fn()
+        .mockImplementation(async (args: { where: Record<string, unknown> }) =>
+          'idempotencyKey' in args.where ? otherSale : draftSale(),
+        );
+      const allocateDocumentNumber = vi.fn();
+      const post = vi.fn();
+      const transaction = vi.fn();
+      const { controller } = await createController({
+        sale: { findUnique },
+        stockBalance: stockBalanceStubs({ p1: 10, p2: 4 }),
+        posting: { allocateDocumentNumber, post } as Partial<StockPostingService>,
+        transaction,
+      });
+
+      await expect(
+        call(controller.confirm(staffUser), { id: 'sale1', idempotencyKey: 'key-shared' }),
+      ).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: SALE_IDEMPOTENCY_KEY_REUSED_MESSAGE,
+      });
+      // The reused key confirms nothing for the requested draft.
       expect(transaction).not.toHaveBeenCalled();
       expect(allocateDocumentNumber).not.toHaveBeenCalled();
       expect(post).not.toHaveBeenCalled();

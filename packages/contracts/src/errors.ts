@@ -115,6 +115,14 @@ export function saleInsufficientStockMessage(skus: string[]): string {
   return `จำนวนสินค้าคงเหลือไม่เพียงพอสำหรับการขาย: ${skus.join(', ')} กรุณาตรวจสอบจำนวนคงเหลือและแก้ไขก่อนยืนยัน`;
 }
 
+/**
+ * A confirmation reused an idempotency key that already belongs to a DIFFERENT sale (#14). The key
+ * must be unique per confirmation; replaying it against another sale would return the wrong
+ * document. The user (client) must retry with a fresh key for this sale.
+ */
+export const SALE_IDEMPOTENCY_KEY_REUSED_MESSAGE =
+  'คีย์การยืนยันซ้ำนี้ถูกใช้กับรายการขายอื่นแล้ว กรุณาใช้คีย์ใหม่สำหรับรายการนี้';
+
 /** A store-scoped user acted for a store that is not theirs. The user cannot retry; it is forbidden. */
 export const STORE_SCOPE_FORBIDDEN_MESSAGE =
   'คุณไม่มีสิทธิ์ทำรายการสำหรับสาขานี้ กรุณาทำรายการเฉพาะสาขาที่คุณได้รับมอบหมาย';

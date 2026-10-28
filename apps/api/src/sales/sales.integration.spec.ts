@@ -296,6 +296,59 @@ describe.skipIf(!databaseReachable)('SalesController confirm (real Postgres)', (
     expect(await s.saleMovements(s.product1Id)).toBe(1);
   });
 
+  // Exactly-one-wins under the FOR UPDATE lock (not the fast-path). Two concurrent confirms of the
+  // SAME draft with DIFFERENT keys cannot both post: neither key pre-check finds the other's key, so
+  // both enter the transaction and contend on the `SELECT ... FOR UPDATE` of the sale row. The loser
+  // blocks, re-reads CONFIRMED and replays the winner without posting. Stock is deducted exactly once
+  // and exactly one SALE movement exists, proving the lock — not the unique key — is what serializes
+  // two confirms of one draft.
+  it('two concurrent confirms of the same draft with different keys deduct once (lock path)', async () => {
+    const s = await seedScenario(10, 5);
+    const saleId = await seedDraftSale(s, [{ productId: s.product1Id, quantity: 2 }]);
+
+    const [a, b] = await Promise.all([
+      call(controller.confirm(s.staffUser), { id: saleId, idempotencyKey: `idem-${randomUUID()}` }),
+      call(controller.confirm(s.staffUser), { id: saleId, idempotencyKey: `idem-${randomUUID()}` }),
+    ]);
+
+    // Both callers saw the same confirmed sale with the same winning document number.
+    expect(a.id).toBe(b.id);
+    expect(a.documentNumber).toBe(b.documentNumber);
+    expect(a.status).toBe('CONFIRMED');
+    // Stock was deducted exactly once despite two different keys racing on one draft.
+    expect(await s.balance(s.product1Id)).toBe(8);
+    expect(await s.saleMovements(s.product1Id)).toBe(1);
+    // Only one SAL number was consumed for this sale.
+    const sale = await harness.prisma.sale.findUnique({ where: { id: saleId } });
+    expect(sale?.documentNumber).toBe(a.documentNumber);
+  });
+  // rejected, and the second draft is left untouched (no deduction, still DRAFT). This closes the
+  // gap that the key — written by UPDATE onto a caller-named draft — could otherwise replay the
+  // wrong document across two independent sales.
+  it('rejects reusing a key that already belongs to a different sale, leaving the second draft untouched', async () => {
+    const s = await seedScenario(10, 5);
+    const key = `idem-${randomUUID()}`;
+    const firstSaleId = await seedDraftSale(s, [{ productId: s.product1Id, quantity: 2 }]);
+    const secondSaleId = await seedDraftSale(s, [{ productId: s.product2Id, quantity: 1 }]);
+
+    const first = await call(controller.confirm(s.staffUser), {
+      id: firstSaleId,
+      idempotencyKey: key,
+    });
+    expect(first.status).toBe('CONFIRMED');
+
+    // Reusing the same key against a different draft is rejected, not silently replayed.
+    await expect(
+      call(controller.confirm(s.staffUser), { id: secondSaleId, idempotencyKey: key }),
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+
+    // The second draft was not confirmed and SKU002 was not deducted.
+    const secondReread = await harness.prisma.sale.findUnique({ where: { id: secondSaleId } });
+    expect(secondReread?.status).toBe('DRAFT');
+    expect(await s.balance(s.product2Id)).toBe(5);
+    expect(await s.saleMovements(s.product2Id)).toBe(0);
+  });
+
   // Never-negative under exact-boundary selling: selling exactly the opening quantity succeeds and
   // drives the balance to 0, never below. A follow-up draft for one more is then rejected.
   it('sells exactly the opening quantity to zero, then rejects selling one more', async () => {
