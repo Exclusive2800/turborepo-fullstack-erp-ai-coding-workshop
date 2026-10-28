@@ -259,6 +259,14 @@ async function main() {
   const staleStoreIds = nonFixtureStores.map((store) => store.id);
   const staleProductIds = nonFixtureProducts.map((product) => product.id);
 
+  // Goods receipts are not part of the Section 8 fixture (PO-DEMO-001 ends Approved with no
+  // receipts, #9/#21). Drop every receipt before the purchase-order and master deletes: a
+  // GoodsReceipt references its PurchaseOrder/Store with Restrict and a GoodsReceiptLine references
+  // its Product/PurchaseOrderLine with Restrict, so a receipt left behind would block those deletes.
+  // Lines cascade from the receipt. This also keeps a reseed over a used database (the e2e suite
+  // records receipts through the live API) matching a fresh one.
+  await prisma.goodsReceipt.deleteMany({});
+
   // Purchase orders first (they reference supplier/store/product); PO-DEMO-001 is kept, everything
   // else — including any order that points at a store/product we are about to drop — goes. Lines
   // cascade from the order.

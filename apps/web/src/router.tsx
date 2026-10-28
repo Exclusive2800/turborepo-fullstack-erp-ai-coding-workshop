@@ -4,6 +4,7 @@ import { HomePage } from '@/routes/home';
 import { LoginPage } from '@/routes/login';
 import { ProductsPage } from '@/routes/products';
 import { PurchaseOrdersPage } from '@/routes/purchase-orders';
+import { ReceivingPage } from '@/routes/receiving';
 import { RootLayout } from '@/routes/root-layout';
 import { SalesPage } from '@/routes/sales';
 import { StockPage } from '@/routes/stock';
@@ -23,6 +24,7 @@ export const router = createBrowserRouter([
           { index: true, element: <HomePage /> },
           { path: 'products', element: <ProductsPage /> },
           { path: 'purchase-orders', element: <PurchaseOrdersPage /> },
+          { path: 'receiving', element: <ReceivingPage /> },
           { path: 'sales', element: <SalesPage /> },
           { path: 'stock', element: <StockPage /> },
           { path: 'stores', element: <StoresPage /> },
