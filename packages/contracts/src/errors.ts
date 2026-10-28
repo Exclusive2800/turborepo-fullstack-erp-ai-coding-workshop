@@ -130,6 +130,13 @@ export const SALE_IDEMPOTENCY_KEY_REUSED_MESSAGE =
 export const REPORT_DATE_RANGE_INVALID_MESSAGE =
   'ช่วงวันที่ไม่ถูกต้อง วันที่สิ้นสุดต้องไม่อยู่ก่อนวันที่เริ่มต้น กรุณาแก้ไขช่วงวันที่';
 
+/**
+ * The empty-state message a report screen shows when no confirmed sales match the chosen date range
+ * and store (RPT-01, AC-08 sales-zero half). The figures are all zero; this tells the manager the
+ * report ran and simply found nothing, not that it failed.
+ */
+export const REPORT_NO_SALES_MESSAGE = 'ไม่มียอดขายที่ยืนยันแล้วในช่วงวันที่และสาขาที่เลือก';
+
 /** A store-scoped user acted for a store that is not theirs. The user cannot retry; it is forbidden. */
 export const STORE_SCOPE_FORBIDDEN_MESSAGE =
   'คุณไม่มีสิทธิ์ทำรายการสำหรับสาขานี้ กรุณาทำรายการเฉพาะสาขาที่คุณได้รับมอบหมาย';

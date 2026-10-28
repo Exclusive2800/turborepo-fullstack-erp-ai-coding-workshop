@@ -5,6 +5,7 @@ import { LoginPage } from '@/routes/login';
 import { ProductsPage } from '@/routes/products';
 import { PurchaseOrdersPage } from '@/routes/purchase-orders';
 import { ReceivingPage } from '@/routes/receiving';
+import { ReportsPage } from '@/routes/reports';
 import { RootLayout } from '@/routes/root-layout';
 import { SalesPage } from '@/routes/sales';
 import { StockPage } from '@/routes/stock';
@@ -26,6 +27,7 @@ export const router = createBrowserRouter([
           { path: 'purchase-orders', element: <PurchaseOrdersPage /> },
           { path: 'receiving', element: <ReceivingPage /> },
           { path: 'sales', element: <SalesPage /> },
+          { path: 'reports', element: <ReportsPage /> },
           { path: 'stock', element: <StockPage /> },
           { path: 'stores', element: <StoresPage /> },
           { path: 'suppliers', element: <SuppliersPage /> },
