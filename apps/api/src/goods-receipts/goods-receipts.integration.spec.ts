@@ -605,4 +605,44 @@ describe.skipIf(!databaseReachable)('GoodsReceiptsController (real Postgres)', (
     expect(await second.balance()).toBe(10);
     expect(await second.movements()).toBe(0);
   });
+
+  // Q-02 (#12, Seam 2): a product deactivated AFTER its PO is approved can still be received against
+  // that approved order, and the receipt posts stock and advances the PO exactly as for an active
+  // product. This is the integrity half of the clarification: MD-02's active-only rule guards new
+  // documents (proven on the purchase-orders spec, PRODUCT_INACTIVE_MESSAGE), while an approved
+  // commitment is still fulfilled. The scenario opens the store at 10, approves an order for 20,
+  // flips the product to inactive, then receives 8 — stock must rise to 18, one receipt and one
+  // GOODS_RECEIPT movement exist, and the order is PARTIALLY_RECEIVED (user story 38, spec #1 Q-02).
+  it('receives against an approved PO whose product was deactivated after approval: stock 18, one receipt, PARTIALLY_RECEIVED (Q-02)', async () => {
+    const s = await seedScenario(20);
+
+    // Deactivate the product after the order is approved — this is the exact Q-02 sequence.
+    await harness.prisma.product.update({
+      where: { id: s.productId },
+      data: { active: false },
+    });
+    const deactivated = await harness.prisma.product.findUnique({ where: { id: s.productId } });
+    expect(deactivated?.active).toBe(false);
+
+    // Receiving still succeeds against the approved line.
+    const receipt = await call(controller.receive(s.staffUser), {
+      purchaseOrderId: s.orderId,
+      lines: [{ purchaseOrderLineId: s.purchaseOrderLineId, quantity: 8 }],
+    });
+
+    expect(receipt.number).toMatch(/^GR-/);
+    expect(receipt.lines).toHaveLength(1);
+
+    // Stock rose 10 → 18, exactly one receipt and one movement, order PARTIALLY_RECEIVED.
+    expect(await s.balance()).toBe(18);
+    expect(await s.movements()).toBe(1);
+    const receipts = await harness.prisma.goodsReceipt.findMany({
+      where: { purchaseOrderId: s.orderId },
+    });
+    expect(receipts).toHaveLength(1);
+    const reread = await harness.prisma.purchaseOrder.findUnique({ where: { id: s.orderId } });
+    expect(reread?.status).toBe('PARTIALLY_RECEIVED');
+    const view = await call(controller.receivable(s.staffUser), { purchaseOrderId: s.orderId });
+    expect(view.lines[0]).toMatchObject({ ordered: 20, received: 8, outstanding: 12 });
+  });
 });

@@ -458,6 +458,49 @@ describe('GoodsReceiptsController', () => {
     });
   });
 
+  // Q-02 (#12, Seam 1). Receiving against an already-Approved PO proceeds even when the line's
+  // product was deactivated after approval — MD-02's active-only rule governs *new* documents, not
+  // the fulfilment of an existing approved commitment (spec #1 Q-02 resolution, user story 38). The
+  // receive handler loads the PO's lines and their rolled-up receipts; it never consults the
+  // product's `active` flag, so a deactivated product posts stock and advances the order exactly
+  // like an active one. This test pins that: should a future change bolt an active-check onto the
+  // receive path, it fails here. The complementary half — a deactivated product is still rejected on
+  // a *new* PO — lives on the purchase-orders controller spec (PRODUCT_INACTIVE_MESSAGE).
+  describe('receive a deactivated product on an approved PO (Seam 1, Q-02)', () => {
+    it('posts stock and advances the order for a product deactivated after approval', async () => {
+      // The PO was approved while the product was active; the product has since been deactivated.
+      // The order row the handler loads is unchanged by deactivation (lines snapshot sku/name), so
+      // the receive path has no `active` to read — receiving must succeed regardless.
+      const findUnique = vi.fn().mockResolvedValue(orderRow());
+      const allocateDocumentNumber = vi.fn().mockResolvedValue('GR-000001');
+      const post = vi.fn().mockResolvedValue({ id: 'm1', balanceBefore: 10, balanceAfter: 18 });
+      const grCreate = vi.fn().mockResolvedValue({ id: 'gr1' });
+      const poUpdate = vi.fn().mockResolvedValue({});
+      const grFindUnique = vi.fn().mockResolvedValue(receiptRow());
+      const { controller, txClient } = await createController({
+        purchaseOrder: { findUnique },
+        goodsReceipt: { findUnique: grFindUnique },
+        posting: { allocateDocumentNumber, post } as Partial<StockPostingService>,
+        tx: {
+          goodsReceipt: { create: grCreate },
+          purchaseOrder: { update: poUpdate },
+        },
+      });
+
+      const result = await call(controller.receive(staffB01), receiveInput);
+
+      // A real receipt was written and stock was posted — deactivation did not block fulfilment.
+      expect(result).toMatchObject({ number: 'GR-000001', purchaseOrderId: 'po1', storeId: 's1' });
+      expect(post).toHaveBeenCalledWith(
+        expect.objectContaining({ productId: 'p1', qtyChange: 8, type: 'GOODS_RECEIPT' }),
+        txClient,
+      );
+      expect(poUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { status: 'PARTIALLY_RECEIVED' } }),
+      );
+    });
+  });
+
   // Immutability (#11, Seam 1, AC-05). A confirmed receipt is append-only: the goods-receipt
   // contract offers no route to edit or cancel one, so there is no handler to reach. If a future
   // change adds a mutation route it must fail this guard deliberately, not by accident.
