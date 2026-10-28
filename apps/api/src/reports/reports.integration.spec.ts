@@ -294,7 +294,9 @@ describe.skipIf(!databaseReachable)('ReportsController stock reports (real Postg
 
   // A product with no per-store threshold is never low-stock, even at balance 0.
   it('low-stock excludes a product with no threshold for the store', async () => {
-    const { storeId } = await seedStockScenario([{ sku: 'NOTHRESH', quantity: 0, threshold: null }]);
+    const { storeId } = await seedStockScenario([
+      { sku: 'NOTHRESH', quantity: 0, threshold: null },
+    ]);
 
     const report = await call(controller.lowStock(), { storeId });
 

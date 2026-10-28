@@ -123,7 +123,9 @@ describe('StockReportsPage', () => {
   });
 
   it('prompts to pick a store before the low-stock report can run', async () => {
-    const fetch = mockApi(reference({ 'GET /reports/low-stock': { storeId: 's1', items: [], total: 0 } }));
+    const fetch = mockApi(
+      reference({ 'GET /reports/low-stock': { storeId: 's1', items: [], total: 0 } }),
+    );
 
     renderPage();
 

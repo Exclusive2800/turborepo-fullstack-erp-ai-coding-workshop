@@ -150,7 +150,8 @@ export const REPORT_NO_STOCK_MESSAGE =
  * threshold for the chosen store (RPT-02, AC-08 low-stock half). It tells the user stock is healthy
  * for that store, not that the report failed.
  */
-export const REPORT_NO_LOW_STOCK_MESSAGE = 'ไม่มีสินค้าที่ใกล้หมดในสาขาที่เลือก สต็อกอยู่ในระดับปกติ';
+export const REPORT_NO_LOW_STOCK_MESSAGE =
+  'ไม่มีสินค้าที่ใกล้หมดในสาขาที่เลือก สต็อกอยู่ในระดับปกติ';
 
 /** A store-scoped user acted for a store that is not theirs. The user cannot retry; it is forbidden. */
 export const STORE_SCOPE_FORBIDDEN_MESSAGE =

@@ -55,8 +55,7 @@ export function StockReportsPage() {
   const needsStore = kind === 'low-stock' && storeId === '';
   // The report resolved and matched nothing (and, for low-stock, a store was chosen).
   const isEmpty = !needsStore && !!report.data && items.length === 0;
-  const emptyMessage =
-    kind === 'low-stock' ? REPORT_NO_LOW_STOCK_MESSAGE : REPORT_NO_STOCK_MESSAGE;
+  const emptyMessage = kind === 'low-stock' ? REPORT_NO_LOW_STOCK_MESSAGE : REPORT_NO_STOCK_MESSAGE;
 
   return (
     <div className="space-y-6">

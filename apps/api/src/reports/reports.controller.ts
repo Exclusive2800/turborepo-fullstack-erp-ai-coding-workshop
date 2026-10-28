@@ -4,11 +4,9 @@ import {
   type DailySalesReport,
   type DailySalesReportInput,
   type LowStockReport,
-  type LowStockReportInput,
   reportingDayInterval,
   type StockItem,
   type StockOnHandReport,
-  type StockOnHandReportInput,
 } from '@erp/contracts';
 import { Implement, implement } from '@orpc/nest';
 import { Roles } from '../auth/auth.decorators.js';
@@ -92,7 +90,9 @@ export class ReportsController {
       where: { OR: rows.map((r) => ({ productId: r.productId, storeId: r.storeId })) },
       select: { productId: true, storeId: true, threshold: true },
     })) as { productId: string; storeId: string; threshold: number }[];
-    const thresholdOf = new Map(thresholds.map((t) => [`${t.productId}:${t.storeId}`, t.threshold]));
+    const thresholdOf = new Map(
+      thresholds.map((t) => [`${t.productId}:${t.storeId}`, t.threshold]),
+    );
 
     return rows.map((row) => {
       const threshold = thresholdOf.get(`${row.productId}:${row.storeId}`) ?? null;
