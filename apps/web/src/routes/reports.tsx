@@ -1,6 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { REPORT_NO_SALES_MESSAGE, REPORTING_TIME_ZONE, RETRY_MESSAGE } from '@erp/contracts';
+import {
+  REPORT_DATE_RANGE_INVALID_MESSAGE,
+  REPORT_NO_SALES_MESSAGE,
+  REPORTING_TIME_ZONE,
+  RETRY_MESSAGE,
+} from '@erp/contracts';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -92,7 +97,7 @@ export function ReportsPage() {
           </form>
           {!rangeValid && (
             <p role="alert" className="mt-2 text-sm text-destructive">
-              ช่วงวันที่ไม่ถูกต้อง วันที่สิ้นสุดต้องไม่อยู่ก่อนวันที่เริ่มต้น กรุณาแก้ไขช่วงวันที่
+              {REPORT_DATE_RANGE_INVALID_MESSAGE}
             </p>
           )}
         </CardContent>
@@ -114,11 +119,14 @@ export function ReportsPage() {
             </p>
           )}
           {isEmpty && (
-            <p role="status" className="text-sm text-muted-foreground">
+            <p role="status" className="mb-4 text-sm text-muted-foreground">
               {REPORT_NO_SALES_MESSAGE}
             </p>
           )}
-          {data && !isEmpty && (
+          {data && (
+            // Always show the figures once the report resolves — zero totals (0 / 0 / "0.00") when
+            // nothing matches, alongside the empty-state message above (user story 52: "zero totals
+            // AND a clear empty-state message").
             <dl className="grid gap-4 sm:grid-cols-3">
               <div className="space-y-1">
                 <dt className="text-sm text-muted-foreground">จำนวนเอกสาร</dt>

@@ -69,14 +69,19 @@ describe('ReportsPage', () => {
     expect(screen.getByText('455.00')).toBeInTheDocument();
   });
 
-  it('shows a clear Thai empty-state message when nothing matches (AC-08 sales-zero half)', async () => {
+  it('shows a clear Thai empty-state message and explicit zero totals when nothing matches (AC-08 sales-zero half)', async () => {
     mockApi(reference({ 'GET /reports/daily-sales': emptyReport }));
 
     renderPage();
 
+    // The empty-state message and the explicit zero figures are shown together (user story 52).
     expect(
       await screen.findByText('ไม่มียอดขายที่ยืนยันแล้วในช่วงวันที่และสาขาที่เลือก'),
     ).toBeInTheDocument();
+    expect(screen.getByText('จำนวนเอกสาร')).toBeInTheDocument();
+    expect(screen.getByText('0.00')).toBeInTheDocument();
+    // Both the document count and the units sold read zero.
+    expect(screen.getAllByText('0').length).toBeGreaterThanOrEqual(2);
   });
 
   it('sends the chosen date range and store to the report endpoint', async () => {
