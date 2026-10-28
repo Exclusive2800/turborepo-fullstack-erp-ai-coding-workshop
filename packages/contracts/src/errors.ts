@@ -123,6 +123,13 @@ export function saleInsufficientStockMessage(skus: string[]): string {
 export const SALE_IDEMPOTENCY_KEY_REUSED_MESSAGE =
   'คีย์การยืนยันซ้ำนี้ถูกใช้กับรายการขายอื่นแล้ว กรุณาใช้คีย์ใหม่สำหรับรายการนี้';
 
+/**
+ * A report's date range was invalid — the end day precedes the start day (RPT-01). The user must
+ * correct the range so `to` is on or after `from`.
+ */
+export const REPORT_DATE_RANGE_INVALID_MESSAGE =
+  'ช่วงวันที่ไม่ถูกต้อง วันที่สิ้นสุดต้องไม่อยู่ก่อนวันที่เริ่มต้น กรุณาแก้ไขช่วงวันที่';
+
 /** A store-scoped user acted for a store that is not theirs. The user cannot retry; it is forbidden. */
 export const STORE_SCOPE_FORBIDDEN_MESSAGE =
   'คุณไม่มีสิทธิ์ทำรายการสำหรับสาขานี้ กรุณาทำรายการเฉพาะสาขาที่คุณได้รับมอบหมาย';
