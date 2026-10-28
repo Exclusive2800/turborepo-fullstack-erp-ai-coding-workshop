@@ -107,3 +107,33 @@ export const STORE_SCOPE_UNASSIGNED_MESSAGE =
 
 /** A cross-store user did not name a target store (INV). The user must choose a store. */
 export const STORE_SCOPE_TARGET_REQUIRED_MESSAGE = 'กรุณาเลือกสาขาที่ต้องการทำรายการ';
+
+/**
+ * A goods receipt was recorded against a purchase order that is not in a receivable state (GR-01).
+ * Only an Approved or Partially Received order can be received against; the user cannot retry the
+ * same action until the order reaches a receivable status.
+ */
+export const GR_ORDER_NOT_RECEIVABLE_MESSAGE =
+  'ไม่สามารถรับสินค้าสำหรับใบสั่งซื้อนี้ได้ เนื่องจากใบสั่งซื้อยังไม่ได้รับการอนุมัติหรือไม่อยู่ในสถานะที่รับสินค้าได้';
+
+/**
+ * A goods-receipt line referenced a product/line that is not on the purchase order (GR-02). The
+ * user must correct the input — only lines of the order being received can be added.
+ */
+export const GR_LINE_NOT_ON_ORDER_MESSAGE =
+  'ไม่สามารถรับสินค้าที่ไม่อยู่ในใบสั่งซื้อได้ กรุณารับเฉพาะรายการที่อยู่ในใบสั่งซื้อ';
+
+/**
+ * A goods receipt would push the cumulative received quantity on a line beyond the ordered quantity
+ * (GR-02). The user must correct the quantity so cumulative received never exceeds ordered.
+ */
+export const GR_OVER_RECEIVE_MESSAGE =
+  'จำนวนที่รับสะสมเกินจำนวนที่สั่งซื้อ กรุณาตรวจสอบและแก้ไขจำนวนที่รับให้ไม่เกินยอดคงค้าง';
+
+/** A goods receipt was submitted without any received line (GR-01). The user must add at least one. */
+export const GR_LINES_REQUIRED_MESSAGE =
+  'การรับสินค้าต้องมีรายการอย่างน้อย 1 รายการ กรุณาระบุจำนวนที่รับ';
+
+/** A received quantity on a goods-receipt line was not a positive whole number (GR-02). Correct it. */
+export const GR_QUANTITY_POSITIVE_MESSAGE =
+  'จำนวนที่รับต้องเป็นจำนวนเต็มบวก (มากกว่า 0 และไม่มีเศษทศนิยม) กรุณาแก้ไข';

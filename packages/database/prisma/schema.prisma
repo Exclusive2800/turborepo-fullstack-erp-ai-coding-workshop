@@ -37,6 +37,8 @@ model User {
   movements    StockMovement[]
   /// Purchase orders this user created (#7). A creator referenced by an order is never deleted.
   createdPurchaseOrders PurchaseOrder[]
+  /// Goods receipts this user recorded (#9). A receiver referenced by a receipt is never deleted.
+  goodsReceipts GoodsReceipt[]
   /// Sales this user created as a STAFF employee (#13). A creator referenced by a sale stays.
   createdSales Sale[]
   createdAt    DateTime @default(now()) @db.Timestamptz(3)
@@ -53,6 +55,8 @@ model Store {
   balances   StockBalance[]
   /// Purchase orders whose destination is this store (#7).
   purchaseOrders PurchaseOrder[]
+  /// Goods receipts delivered into this store (#9).
+  goodsReceipts  GoodsReceipt[]
   /// Sales created for this store (#13). A store referenced by a sale is never deleted.
   sales          Sale[]
   createdAt  DateTime @default(now()) @db.Timestamptz(3)
@@ -94,6 +98,8 @@ model Product {
   balances     StockBalance[]
   /// Purchase-order lines that reference this product (#7). A line keeps the link for receiving (#9).
   purchaseOrderLines PurchaseOrderLine[]
+  /// Goods-receipt lines that received this product (#9). The line keeps the link for history.
+  goodsReceiptLines  GoodsReceiptLine[]
   /// Sale lines that reference this product (#13). The line keeps the link for confirmation (#14).
   saleLines    SaleLine[]
   createdAt    DateTime @default(now()) @db.Timestamptz(3)
@@ -226,6 +232,8 @@ model PurchaseOrder {
   createdById         String?
   createdBy           User?               @relation(fields: [createdById], references: [id])
   lines               PurchaseOrderLine[]
+  /// Goods receipts recorded against this order (#9). Receiving advances the order's status.
+  goodsReceipts       GoodsReceipt[]
   createdAt           DateTime            @default(now()) @db.Timestamptz(3)
   updatedAt           DateTime            @updatedAt @db.Timestamptz(3)
 
@@ -252,9 +260,67 @@ model PurchaseOrderLine {
   /// Snapshot of the purchase unit price at creation, two-decimal money.
   unitPrice       Decimal       @db.Decimal(12, 2)
   lineTotal       Decimal       @db.Decimal(12, 2)
+  /// Goods-receipt lines booked against this order line (#9). Their cumulative received quantity
+  /// can never exceed `quantity`; outstanding = ordered − sum(received).
+  goodsReceiptLines GoodsReceiptLine[]
   createdAt       DateTime      @default(now()) @db.Timestamptz(3)
 
   @@index([purchaseOrderId])
+  @@index([productId])
+}
+
+// A goods receipt against an approved purchase order (GR-01/GR-02/GR-03, #9). A STAFF employee
+// records what physically arrived for one PO into their store. `number` is the unique document
+// number allocated at confirmation via the shared "GR" allocator (Section 4.3). Confirmation is
+// atomic (GR-03): in one transaction the receipt and its lines are written, destination-store
+// `StockBalance` is raised, one GOODS_RECEIPT `StockMovement` is appended per received line, and the
+// order advances to PARTIALLY_RECEIVED or COMPLETED. A receipt is immutable once written — there is
+// no `updatedAt` and no edit handler, mirroring the append-only ledger.
+//
+// Scope note (#9 is the happy path only): idempotency, over-receive races and concurrency belong to
+// #11 and are NOT modelled here. This carries only what the atomic post needs.
+model GoodsReceipt {
+  id              String             @id @default(cuid())
+  number          String             @unique
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder      @relation(fields: [purchaseOrderId], references: [id])
+  /// The destination store the stock was received into (the PO's store; derived from the principal).
+  storeId         String
+  store           Store              @relation(fields: [storeId], references: [id])
+  /// Who recorded the receipt (the STAFF employee). Never null for #9 receipts.
+  receivedById    String
+  receivedBy      User               @relation(fields: [receivedById], references: [id])
+  lines           GoodsReceiptLine[]
+  createdAt       DateTime           @default(now()) @db.Timestamptz(3)
+
+  @@index([purchaseOrderId])
+  @@index([storeId])
+}
+
+// One line of a goods receipt (#9). Links back to the PO line it fulfils so cumulative received can
+// be checked against ordered, and snapshots the product's SKU/name at receipt time so history never
+// changes when the master is later edited. `quantity` is the positive whole number received on this
+// receipt for this line. Each line produces exactly one GOODS_RECEIPT stock movement at confirmation.
+model GoodsReceiptLine {
+  id                  String            @id @default(cuid())
+  goodsReceiptId      String
+  goodsReceipt        GoodsReceipt      @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
+  /// The PO line this receipt fulfils. Cumulative received across all receipts can never exceed the
+  /// ordered quantity on this line (GR-02).
+  purchaseOrderLineId String
+  purchaseOrderLine   PurchaseOrderLine @relation(fields: [purchaseOrderLineId], references: [id])
+  productId           String
+  product             Product           @relation(fields: [productId], references: [id])
+  /// Snapshot of the product's SKU at receipt time (kept alongside the live link for display).
+  sku                 String
+  /// Snapshot of the product's name at receipt time; never rewritten by a later master-data edit.
+  productName         String
+  /// The positive whole quantity received on this receipt for this line.
+  quantity            Int
+  createdAt           DateTime          @default(now()) @db.Timestamptz(3)
+
+  @@index([goodsReceiptId])
+  @@index([purchaseOrderLineId])
   @@index([productId])
 }
 

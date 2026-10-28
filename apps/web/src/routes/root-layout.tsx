@@ -35,6 +35,14 @@ export function RootLayout() {
                 ใบสั่งซื้อ
               </NavLink>
               <NavLink
+                to="/receiving"
+                className={({ isActive }) =>
+                  cn('text-muted-foreground hover:text-foreground', isActive && 'text-foreground')
+                }
+              >
+                รับสินค้า
+              </NavLink>
+              <NavLink
                 to="/sales"
                 className={({ isActive }) =>
                   cn('text-muted-foreground hover:text-foreground', isActive && 'text-foreground')
