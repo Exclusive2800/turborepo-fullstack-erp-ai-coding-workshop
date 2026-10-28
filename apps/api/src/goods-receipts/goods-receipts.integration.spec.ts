@@ -1,4 +1,8 @@
-import { GR_OVER_RECEIVE_MESSAGE, type Whoami } from '@erp/contracts';
+import {
+  GR_OVER_RECEIVE_MESSAGE,
+  STORE_SCOPE_FORBIDDEN_MESSAGE,
+  type Whoami,
+} from '@erp/contracts';
 import { call } from '@orpc/server';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PrismaService } from '../database/prisma.service.js';
@@ -21,6 +25,9 @@ describe.skipIf(!databaseReachable)('GoodsReceiptsController (real Postgres)', (
   let harness: IntegrationHarness;
   let controller: GoodsReceiptsController;
   let staff: Whoami;
+  // A STAFF user assigned to a *different* store than the fixture PO's destination — the outsider
+  // the store-scope slice (#10, AC-04) rejects. Mirrors staff_b02 vs PO-DEMO-001 (destination B01).
+  let outsiderStaff: Whoami;
   const suffix = `gr-${Date.now()}`;
   const ids = {
     storeId: '',
@@ -29,6 +36,8 @@ describe.skipIf(!databaseReachable)('GoodsReceiptsController (real Postgres)', (
     supplierId: '',
     purchaseOrderId: '',
     purchaseOrderLineId: '',
+    otherStoreId: '',
+    outsiderUserId: '',
   };
 
   /** Create an Approved PO for `ordered` of the fixture product into the fixture store, opening at 10. */
@@ -103,6 +112,31 @@ describe.skipIf(!databaseReachable)('GoodsReceiptsController (real Postgres)', (
       assignedStoreId: store.id,
     };
 
+    // A second store and a STAFF user pinned to it. This user is the store-scope outsider: their
+    // assigned store is not the fixture PO's destination, so a receive against that PO must be
+    // rejected (#10). Mirrors staff_b02 (B02) vs PO-DEMO-001 (destination B01).
+    const otherStore = await harness.prisma.store.create({
+      data: { code: `IT-OTHER-${suffix}`, name: `Integration other ${suffix}` },
+    });
+    const outsider = await harness.prisma.user.create({
+      data: {
+        email: `it-outsider-${suffix}@erp.local`,
+        name: `Integration outsider ${suffix}`,
+        role: 'STAFF',
+        assignedStoreId: otherStore.id,
+        passwordHash: 'x',
+      },
+    });
+    ids.otherStoreId = otherStore.id;
+    ids.outsiderUserId = outsider.id;
+    outsiderStaff = {
+      id: outsider.id,
+      email: outsider.email,
+      name: outsider.name,
+      role: 'STAFF',
+      assignedStoreId: otherStore.id,
+    };
+
     // Open the store at 10 of the product via the ledger, as the Section 8 B01 opening does.
     await harness.prisma.stockBalance.create({
       data: { productId: product.id, storeId: store.id, quantity: 10 },
@@ -128,9 +162,11 @@ describe.skipIf(!databaseReachable)('GoodsReceiptsController (real Postgres)', (
     await harness.prisma.stockMovement.deleteMany({ where: { productId: ids.productId } });
     await harness.prisma.stockBalance.deleteMany({ where: { productId: ids.productId } });
     await harness.prisma.user.deleteMany({ where: { id: ids.userId } });
+    await harness.prisma.user.deleteMany({ where: { id: ids.outsiderUserId } });
     await harness.prisma.supplier.deleteMany({ where: { id: ids.supplierId } });
     await harness.prisma.product.deleteMany({ where: { id: ids.productId } });
     await harness.prisma.store.deleteMany({ where: { id: ids.storeId } });
+    await harness.prisma.store.deleteMany({ where: { id: ids.otherStoreId } });
     await harness.close();
   });
 
@@ -213,6 +249,52 @@ describe.skipIf(!databaseReachable)('GoodsReceiptsController (real Postgres)', (
       where: { productId: ids.productId, type: 'GOODS_RECEIPT' },
     });
     expect(movementsAfter).toBe(movementsBefore);
+    const reread = await harness.prisma.purchaseOrder.findUnique({ where: { id: order.id } });
+    expect(reread?.status).toBe('APPROVED');
+  });
+
+  // AC-04 / GR-01 (#10, store-scope slice over real Postgres): a STAFF user whose assigned store is
+  // not the PO's destination is rejected, and the rejection leaves the database untouched — no
+  // GoodsReceipt, no StockMovement, and the PO status unchanged. The destination store is derived
+  // from the order, never from the request body, so there is no body store to spoof. This is the
+  // Seam-2 half of the demo: a direct receive by the outsider against the fixture PO is refused and
+  // nothing is written.
+  it('rejects a cross-store receive and writes neither a receipt nor a movement, PO unchanged (AC-04)', async () => {
+    const order = await seedApprovedOrder(20);
+
+    const receiptsBefore = await harness.prisma.goodsReceipt.count({
+      where: { purchaseOrderId: order.id },
+    });
+    const movementsBefore = await harness.prisma.stockMovement.count({
+      where: { productId: ids.productId, type: 'GOODS_RECEIPT' },
+    });
+    const balanceBefore = await harness.prisma.stockBalance.findUnique({
+      where: { productId_storeId: { productId: ids.productId, storeId: ids.storeId } },
+    });
+
+    await expect(
+      call(controller.receive(outsiderStaff), {
+        purchaseOrderId: order.id,
+        lines: [{ purchaseOrderLineId: ids.purchaseOrderLineId, quantity: 8 }],
+      }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: STORE_SCOPE_FORBIDDEN_MESSAGE });
+
+    // No receipt was written for this order.
+    const receiptsAfter = await harness.prisma.goodsReceipt.count({
+      where: { purchaseOrderId: order.id },
+    });
+    expect(receiptsAfter).toBe(receiptsBefore);
+    // No goods-receipt movement was appended for the product.
+    const movementsAfter = await harness.prisma.stockMovement.count({
+      where: { productId: ids.productId, type: 'GOODS_RECEIPT' },
+    });
+    expect(movementsAfter).toBe(movementsBefore);
+    // The destination-store balance is unchanged.
+    const balanceAfter = await harness.prisma.stockBalance.findUnique({
+      where: { productId_storeId: { productId: ids.productId, storeId: ids.storeId } },
+    });
+    expect(balanceAfter?.quantity).toBe(balanceBefore?.quantity);
+    // The PO is still APPROVED — the status machine never advanced.
     const reread = await harness.prisma.purchaseOrder.findUnique({ where: { id: order.id } });
     expect(reread?.status).toBe('APPROVED');
   });
