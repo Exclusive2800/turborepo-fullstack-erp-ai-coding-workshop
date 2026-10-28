@@ -1,6 +1,7 @@
 import { Reflector } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import {
+  contract,
   NOT_FOUND_MESSAGE,
   PRODUCT_INACTIVE_MESSAGE,
   SALE_IDEMPOTENCY_KEY_REUSED_MESSAGE,
@@ -557,6 +558,58 @@ describe('SalesController', () => {
       expect(transaction).not.toHaveBeenCalled();
       expect(allocateDocumentNumber).not.toHaveBeenCalled();
       expect(post).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── #16: confirmed-sale immutability (SAL-04, Seam 1) ───
+  //
+  // A CONFIRMED sale is a permanent financial record: it is viewable but cannot be edited,
+  // cancelled, or returned in this release. Immutability is enforced structurally — the sale
+  // contract exposes no edit/cancel/return route, so there is no handler to reach — and by the one
+  // mutating handler (`confirm`) rejecting a sale that is no longer a Draft, leaving the sale and
+  // its stock untouched. This mirrors the goods-receipt immutability guard (#11). If a future change
+  // adds a mutation route it must fail this guard deliberately, not slip past it by accident.
+  describe('confirmed-sale immutability (Seam 1)', () => {
+    it('exposes no edit, cancel, or return route on the sale contract', () => {
+      const routes = Object.keys(contract.sale);
+      // Exactly the read + draft-lifecycle surface: list/get to view, create a draft, confirm it.
+      // Nothing that edits, cancels, or returns a stored (confirmed) sale.
+      expect(routes.sort()).toEqual(['confirm', 'create', 'get', 'list']);
+      const prototype = SalesController.prototype as unknown as Record<string, unknown>;
+      expect(typeof prototype.confirm).toBe('function');
+      expect(prototype.update).toBeUndefined();
+      expect(prototype.edit).toBeUndefined();
+      expect(prototype.cancel).toBeUndefined();
+      expect(prototype.return).toBeUndefined();
+      expect(prototype.delete).toBeUndefined();
+    });
+
+    it('rejects re-confirming a CONFIRMED sale and writes nothing (edit-via-reconfirm blocked)', async () => {
+      const confirmed = saleRow({
+        status: 'CONFIRMED',
+        documentNumber: 'SAL-000001',
+        confirmedAt: new Date('2026-01-02T03:04:05.000Z'),
+      });
+      const allocateDocumentNumber = vi.fn();
+      const post = vi.fn();
+      const transaction = vi.fn();
+      const { controller } = await createController({
+        sale: { findUnique: vi.fn().mockResolvedValue(confirmed) },
+        stockBalance: {
+          findUnique: vi.fn().mockResolvedValue({ quantity: 10 }),
+        },
+        posting: { allocateDocumentNumber, post } as Partial<StockPostingService>,
+        transaction,
+      });
+
+      await expect(call(controller.confirm(staffB01), { id: 'sale1' })).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: SALE_NOT_CONFIRMABLE_MESSAGE,
+      });
+      // The confirmed sale and its stock are untouched: nothing posted, no number, no transaction.
+      expect(allocateDocumentNumber).not.toHaveBeenCalled();
+      expect(post).not.toHaveBeenCalled();
+      expect(transaction).not.toHaveBeenCalled();
     });
   });
 
