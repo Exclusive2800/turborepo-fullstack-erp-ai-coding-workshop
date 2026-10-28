@@ -67,6 +67,14 @@ export function RootLayout() {
                 รายงานสต็อก
               </NavLink>
               <NavLink
+                to="/movement-history"
+                className={({ isActive }) =>
+                  cn('text-muted-foreground hover:text-foreground', isActive && 'text-foreground')
+                }
+              >
+                ประวัติสต็อก
+              </NavLink>
+              <NavLink
                 to="/stores"
                 className={({ isActive }) =>
                   cn('text-muted-foreground hover:text-foreground', isActive && 'text-foreground')

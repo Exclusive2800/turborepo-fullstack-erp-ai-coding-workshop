@@ -21,6 +21,10 @@ interface Stubs {
   balanceFindMany?: ReturnType<typeof vi.fn>;
   /** productStoreThreshold.findMany result: the per-store thresholds. */
   thresholdFindMany?: ReturnType<typeof vi.fn>;
+  /** stockMovement.findMany result: the movement-history page rows. */
+  movementFindMany?: ReturnType<typeof vi.fn>;
+  /** stockMovement.count result: the movement-history total. */
+  movementCount?: ReturnType<typeof vi.fn>;
 }
 
 async function createController(stubs: Stubs = {}) {
@@ -30,6 +34,8 @@ async function createController(stubs: Stubs = {}) {
     stubs.lineAggregate ?? vi.fn().mockResolvedValue({ _sum: { quantity: null } });
   const balanceFindMany = stubs.balanceFindMany ?? vi.fn().mockResolvedValue([]);
   const thresholdFindMany = stubs.thresholdFindMany ?? vi.fn().mockResolvedValue([]);
+  const movementFindMany = stubs.movementFindMany ?? vi.fn().mockResolvedValue([]);
+  const movementCount = stubs.movementCount ?? vi.fn().mockResolvedValue(0);
   const moduleRef = await Test.createTestingModule({
     controllers: [ReportsController],
     providers: [
@@ -40,6 +46,7 @@ async function createController(stubs: Stubs = {}) {
           saleLine: { aggregate: lineAggregate },
           stockBalance: { findMany: balanceFindMany },
           productStoreThreshold: { findMany: thresholdFindMany },
+          stockMovement: { findMany: movementFindMany, count: movementCount },
         },
       },
     ],
@@ -50,6 +57,8 @@ async function createController(stubs: Stubs = {}) {
     lineAggregate,
     balanceFindMany,
     thresholdFindMany,
+    movementFindMany,
+    movementCount,
   };
 }
 
@@ -340,5 +349,198 @@ describe('ReportsController', () => {
     const reflector = new Reflector();
     expect(reflector.get(ROLES_KEY, ReportsController.prototype.stockOnHand)).toBeUndefined();
     expect(reflector.get(ROLES_KEY, ReportsController.prototype.lowStock)).toBeUndefined();
+  });
+
+  describe('movementHistory (Seam 1)', () => {
+    const manager = {
+      id: 'u-mgr',
+      email: 'manager01@erp.local',
+      name: 'Manager One',
+      role: 'MANAGER' as const,
+      assignedStoreId: null,
+    };
+    const staffB01 = {
+      id: 'u-staff',
+      email: 'staff_b01@erp.local',
+      name: 'Staff B01',
+      role: 'STAFF' as const,
+      assignedStoreId: 'store-b01',
+    };
+
+    /** A ledger row joined to its product/store, as Prisma returns it (timestamp as a Date). */
+    function movementRow(overrides: Record<string, unknown> = {}) {
+      return {
+        id: 'm1',
+        productId: 'p1',
+        storeId: 'store-b01',
+        qtyChange: 5,
+        balanceBefore: 10,
+        balanceAfter: 15,
+        type: 'GOODS_RECEIPT' as const,
+        sourceDocument: 'GR-000001',
+        reason: null,
+        actorId: 'u-staff',
+        createdAt: new Date('2026-01-15T10:00:00.000Z'),
+        product: { sku: 'SKU001', name: 'Water' },
+        store: { code: 'B01' },
+        ...overrides,
+      };
+    }
+
+    it('returns newest-first rows with the source document and the store/product display fields', async () => {
+      const movementFindMany = vi
+        .fn()
+        .mockResolvedValue([
+          movementRow({ id: 'm2', type: 'SALE', sourceDocument: 'SAL-000002', qtyChange: -2 }),
+          movementRow(),
+        ]);
+      const movementCount = vi.fn().mockResolvedValue(2);
+      const { controller } = await createController({ movementFindMany, movementCount });
+
+      const result = await call(
+        controller.movementHistory(manager),
+        { page: 1, pageSize: 20 },
+        { context: {} },
+      );
+
+      expect(result.total).toBe(2);
+      expect(result.storeId).toBeNull();
+      expect(result.items[0]).toMatchObject({
+        id: 'm2',
+        type: 'SALE',
+        sourceDocument: 'SAL-000002',
+        sku: 'SKU001',
+        productName: 'Water',
+        storeCode: 'B01',
+        qtyChange: -2,
+      });
+      // Newest-first ordering on the ledger timestamp.
+      expect(movementFindMany.mock.calls[0]?.[0]?.orderBy).toEqual({ createdAt: 'desc' });
+      // The timestamp is serialized to a UTC ISO string.
+      expect(result.items[1]?.createdAt).toBe('2026-01-15T10:00:00.000Z');
+    });
+
+    it('scopes a STAFF caller to their assigned store, ignoring a storeId in the request', async () => {
+      const movementFindMany = vi.fn().mockResolvedValue([]);
+      const movementCount = vi.fn().mockResolvedValue(0);
+      const { controller } = await createController({ movementFindMany, movementCount });
+
+      // The STAFF caller asks for store-b02, but is pinned to store-b01.
+      const result = await call(
+        controller.movementHistory(staffB01),
+        { page: 1, pageSize: 20, storeId: 'store-b02' },
+        { context: {} },
+      );
+
+      expect(result.storeId).toBe('store-b01');
+      const where = movementFindMany.mock.calls[0]?.[0]?.where;
+      expect(where.storeId).toBe('store-b01');
+    });
+
+    it('lets a MANAGER see every store when no store is named, and one store when named', async () => {
+      const movementFindMany = vi.fn().mockResolvedValue([]);
+      const { controller } = await createController({ movementFindMany });
+
+      await call(controller.movementHistory(manager), { page: 1, pageSize: 20 }, { context: {} });
+      const allWhere = movementFindMany.mock.calls[0]?.[0]?.where;
+      expect(allWhere).not.toHaveProperty('storeId');
+
+      await call(
+        controller.movementHistory(manager),
+        { page: 1, pageSize: 20, storeId: 'store-b02' },
+        { context: {} },
+      );
+      const oneWhere = movementFindMany.mock.calls[1]?.[0]?.where;
+      expect(oneWhere.storeId).toBe('store-b02');
+    });
+
+    it('treats every cross-store role the same way (ADMIN/PURCHASING see all stores, like MANAGER)', async () => {
+      const movementFindMany = vi.fn().mockResolvedValue([]);
+      const { controller } = await createController({ movementFindMany });
+
+      // A PURCHASING officer is cross-store (role = what, store = where), so with no store named the
+      // report spans every store — the same app-wide store-scope rule the other features use.
+      const purchasing = {
+        id: 'u-buy',
+        email: 'buyer01@erp.local',
+        name: 'Buyer One',
+        role: 'PURCHASING' as const,
+        assignedStoreId: null,
+      };
+      const result = await call(
+        controller.movementHistory(purchasing),
+        { page: 1, pageSize: 20 },
+        { context: {} },
+      );
+
+      expect(result.storeId).toBeNull();
+      const where = movementFindMany.mock.calls[0]?.[0]?.where;
+      expect(where).not.toHaveProperty('storeId');
+    });
+
+    it('filters by product, type and the half-open Bangkok date range', async () => {
+      const movementFindMany = vi.fn().mockResolvedValue([]);
+      const { controller } = await createController({ movementFindMany });
+
+      await call(
+        controller.movementHistory(manager),
+        {
+          page: 1,
+          pageSize: 20,
+          productId: 'p1',
+          type: 'ADJUSTMENT',
+          from: '2026-01-15',
+          to: '2026-01-15',
+        },
+        { context: {} },
+      );
+
+      const interval = reportingDayInterval('2026-01-15', '2026-01-15');
+      const where = movementFindMany.mock.calls[0]?.[0]?.where;
+      expect(where.productId).toBe('p1');
+      expect(where.type).toBe('ADJUSTMENT');
+      // Keyed on the movement timestamp, end exclusive.
+      expect(where.createdAt).toEqual({ gte: interval.startUtc, lt: interval.endUtc });
+    });
+
+    it('applies only the supplied bound for an open-ended range', async () => {
+      const movementFindMany = vi.fn().mockResolvedValue([]);
+      const { controller } = await createController({ movementFindMany });
+
+      await call(
+        controller.movementHistory(manager),
+        { page: 1, pageSize: 20, from: '2026-01-15' },
+        { context: {} },
+      );
+
+      const interval = reportingDayInterval('2026-01-15', '2026-01-15');
+      const where = movementFindMany.mock.calls[0]?.[0]?.where;
+      expect(where.createdAt).toEqual({ gte: interval.startUtc });
+    });
+
+    it('returns an empty page when nothing matches (AC empty state)', async () => {
+      const { controller } = await createController();
+
+      const result = await call(
+        controller.movementHistory(manager),
+        { page: 1, pageSize: 20, storeId: 'store-b02' },
+        { context: {} },
+      );
+
+      expect(result).toEqual({
+        storeId: 'store-b02',
+        items: [],
+        total: 0,
+        page: 1,
+        pageSize: 20,
+      });
+    });
+  });
+
+  // Authz: the movement-history report is open to any permitted user (RPT-03, #19) — no @Roles. The
+  // store scope is enforced inside the handler from the principal, not by a role gate.
+  it('leaves the movement-history report open to any signed-in user', () => {
+    const reflector = new Reflector();
+    expect(reflector.get(ROLES_KEY, ReportsController.prototype.movementHistory)).toBeUndefined();
   });
 });

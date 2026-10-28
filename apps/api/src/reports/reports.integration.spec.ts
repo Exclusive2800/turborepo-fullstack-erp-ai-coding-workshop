@@ -304,3 +304,194 @@ describe.skipIf(!databaseReachable)('ReportsController stock reports (real Postg
     expect(report.total).toBe(0);
   });
 });
+
+// Seam 2 (#19): the movement-history report over a real Postgres. Two correctness points a mocked
+// PrismaService cannot exhibit: (1) store scoping is derived from the principal — a STAFF caller
+// only ever sees its assigned store, a MANAGER sees every store — against real rows in two stores;
+// (2) the half-open Asia/Bangkok date range is keyed on the real `timestamptz` movement timestamp,
+// so a movement at 23:30 Bangkok lands on that Bangkok day and the next midnight does not. Each
+// scenario seeds its own stores/product with a unique suffix so it never collides with the Section
+// 8 fixture or a parallel spec.
+describe.skipIf(!databaseReachable)('ReportsController movementHistory (real Postgres)', () => {
+  let harness: IntegrationHarness;
+  let controller: ReportsController;
+
+  const storeIds: string[] = [];
+  const productIds: string[] = [];
+  const userIds: string[] = [];
+
+  /**
+   * Seed two stores (A and B), one product, a STAFF user pinned to store A and a MANAGER, and a
+   * handful of ledger movements of different types across both stores and days. Returns the ids a
+   * test needs to assert scope and range.
+   */
+  async function seedMovementScenario() {
+    const s = `rpt19-${randomUUID()}`;
+    const storeA = await harness.prisma.store.create({ data: { code: `A-${s}`, name: `A ${s}` } });
+    const storeB = await harness.prisma.store.create({ data: { code: `B-${s}`, name: `B ${s}` } });
+    storeIds.push(storeA.id, storeB.id);
+    const product = await harness.prisma.product.create({
+      data: {
+        sku: `SKU-${s}`,
+        name: `${s} product`,
+        category: 'Test',
+        unit: 'unit',
+        sellingPrice: '10.00',
+      },
+    });
+    productIds.push(product.id);
+    const staff = await harness.prisma.user.create({
+      data: {
+        email: `staff-${s}@erp.local`,
+        name: `staff ${s}`,
+        role: 'STAFF',
+        assignedStoreId: storeA.id,
+        passwordHash: 'x',
+      },
+    });
+    const manager = await harness.prisma.user.create({
+      data: { email: `mgr-${s}@erp.local`, name: `mgr ${s}`, role: 'MANAGER', passwordHash: 'x' },
+    });
+    userIds.push(staff.id, manager.id);
+
+    async function movement(
+      storeId: string,
+      type: 'OPENING' | 'ADJUSTMENT' | 'GOODS_RECEIPT' | 'SALE',
+      sourceDocument: string,
+      qtyChange: number,
+      createdAtUtc: string,
+    ) {
+      await harness.prisma.stockMovement.create({
+        data: {
+          productId: product.id,
+          storeId,
+          qtyChange,
+          balanceBefore: 0,
+          balanceAfter: Math.max(0, qtyChange),
+          type,
+          sourceDocument,
+          reason: type === 'ADJUSTMENT' ? 'manual count' : null,
+          actorId: type === 'OPENING' ? null : staff.id,
+          createdAt: new Date(createdAtUtc),
+        },
+      });
+    }
+
+    // Store A: a receipt, a manager adjustment and a sale on 2026-01-15 Bangkok; Store B: a receipt.
+    await movement(storeA.id, 'GOODS_RECEIPT', 'GR-A-0001', 10, '2026-01-15T03:00:00.000Z');
+    await movement(storeA.id, 'ADJUSTMENT', 'ADJUSTMENT', -2, '2026-01-15T05:00:00.000Z');
+    await movement(storeA.id, 'SALE', 'SAL-A-0001', -1, '2026-01-15T16:30:00.000Z'); // 23:30 BKK
+    await movement(storeB.id, 'GOODS_RECEIPT', 'GR-B-0001', 7, '2026-01-16T02:00:00.000Z');
+
+    const staffPrincipal = {
+      id: staff.id,
+      email: staff.email,
+      name: staff.name,
+      role: 'STAFF' as const,
+      assignedStoreId: storeA.id,
+    };
+    const managerPrincipal = {
+      id: manager.id,
+      email: manager.email,
+      name: manager.name,
+      role: 'MANAGER' as const,
+      assignedStoreId: null,
+    };
+    return {
+      productId: product.id,
+      storeAId: storeA.id,
+      storeBId: storeB.id,
+      staffPrincipal,
+      managerPrincipal,
+    };
+  }
+
+  beforeAll(async () => {
+    harness = createIntegrationHarness();
+    controller = new ReportsController(harness.prisma as unknown as PrismaService);
+  });
+
+  afterAll(async () => {
+    if (!harness) return;
+    await harness.prisma.stockMovement.deleteMany({ where: { storeId: { in: storeIds } } });
+    await harness.prisma.stockBalance.deleteMany({ where: { storeId: { in: storeIds } } });
+    await harness.prisma.user.deleteMany({ where: { id: { in: userIds } } });
+    await harness.prisma.product.deleteMany({ where: { id: { in: productIds } } });
+    await harness.prisma.store.deleteMany({ where: { id: { in: storeIds } } });
+    await harness.close();
+  });
+
+  // Store scope from the principal: a MANAGER sees both stores' movements; a STAFF caller sees only
+  // their store even when they ask for the other one — the demo's "staff_b01 sees only B01 while
+  // manager01 sees both stores".
+  it('shows a MANAGER both stores but a STAFF caller only their assigned store', async () => {
+    const { productId, storeAId, storeBId, staffPrincipal, managerPrincipal } =
+      await seedMovementScenario();
+
+    const asManager = await call(
+      controller.movementHistory(managerPrincipal),
+      { page: 1, pageSize: 50, productId },
+      { context: {} },
+    );
+    const managerStores = new Set(asManager.items.map((row) => row.storeId));
+    expect(managerStores.has(storeAId)).toBe(true);
+    expect(managerStores.has(storeBId)).toBe(true);
+    expect(asManager.storeId).toBeNull();
+
+    // The STAFF caller names store B, but is pinned to store A: they see only store A's movements.
+    const asStaff = await call(
+      controller.movementHistory(staffPrincipal),
+      { page: 1, pageSize: 50, productId, storeId: storeBId },
+      { context: {} },
+    );
+    expect(asStaff.storeId).toBe(storeAId);
+    expect(asStaff.items.every((row) => row.storeId === storeAId)).toBe(true);
+    expect(asStaff.items.some((row) => row.storeId === storeBId)).toBe(false);
+  });
+
+  // The report surfaces each movement type with its source-document reference — a receipt, a
+  // manager adjustment and a sale, the three the demo opens.
+  it('surfaces goods-receipt, adjustment and sale movements with their source documents', async () => {
+    const { productId, storeAId, managerPrincipal } = await seedMovementScenario();
+
+    const report = await call(
+      controller.movementHistory(managerPrincipal),
+      { page: 1, pageSize: 50, productId, storeId: storeAId },
+      { context: {} },
+    );
+
+    const byType = new Map(report.items.map((row) => [row.type, row.sourceDocument]));
+    expect(byType.get('GOODS_RECEIPT')).toBe('GR-A-0001');
+    expect(byType.get('ADJUSTMENT')).toBe('ADJUSTMENT');
+    expect(byType.get('SALE')).toBe('SAL-A-0001');
+    // Newest-first: the 23:30 sale is the most recent movement in store A.
+    expect(report.items[0]?.type).toBe('SALE');
+  });
+
+  // The half-open Bangkok range keyed on the real timestamp: the 23:30 Bangkok sale lands on the
+  // 15th; store B's receipt at 09:00 Bangkok on the 16th does not.
+  it('filters on the half-open Bangkok day keyed on the movement timestamp', async () => {
+    const { productId, managerPrincipal } = await seedMovementScenario();
+
+    const day15 = await call(
+      controller.movementHistory(managerPrincipal),
+      { page: 1, pageSize: 50, productId, from: '2026-01-15', to: '2026-01-15' },
+      { context: {} },
+    );
+    // All three store-A movements fall on 2026-01-15 Bangkok; store B's 16th receipt does not.
+    const docs15 = day15.items.map((row) => row.sourceDocument);
+    expect(docs15).toContain('GR-A-0001');
+    expect(docs15).toContain('ADJUSTMENT');
+    expect(docs15).toContain('SAL-A-0001');
+    expect(docs15).not.toContain('GR-B-0001');
+
+    const day16 = await call(
+      controller.movementHistory(managerPrincipal),
+      { page: 1, pageSize: 50, productId, from: '2026-01-16', to: '2026-01-16' },
+      { context: {} },
+    );
+    const docs16 = day16.items.map((row) => row.sourceDocument);
+    expect(docs16).toContain('GR-B-0001');
+    expect(docs16).not.toContain('SAL-A-0001');
+  });
+});
