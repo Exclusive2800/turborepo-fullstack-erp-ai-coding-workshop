@@ -1,4 +1,10 @@
-import { isCrossStoreRole, type Whoami } from '@erp/contracts';
+import {
+  isCrossStoreRole,
+  STORE_SCOPE_FORBIDDEN_MESSAGE,
+  STORE_SCOPE_TARGET_REQUIRED_MESSAGE,
+  STORE_SCOPE_UNASSIGNED_MESSAGE,
+  type Whoami,
+} from '@erp/contracts';
 import { ORPCError } from '@orpc/nest';
 
 /**
@@ -11,7 +17,7 @@ import { ORPCError } from '@orpc/nest';
 export function assertStoreScope(user: Whoami, targetStoreId: string): void {
   if (isCrossStoreRole(user.role)) return;
   if (user.assignedStoreId && user.assignedStoreId === targetStoreId) return;
-  throw new ORPCError('FORBIDDEN', { message: 'You cannot act for this store' });
+  throw new ORPCError('FORBIDDEN', { message: STORE_SCOPE_FORBIDDEN_MESSAGE });
 }
 
 /**
@@ -24,12 +30,12 @@ export function assertStoreScope(user: Whoami, targetStoreId: string): void {
 export function resolveStoreScope(user: Whoami, requestedStoreId: string | undefined): string {
   if (!isCrossStoreRole(user.role)) {
     if (!user.assignedStoreId) {
-      throw new ORPCError('FORBIDDEN', { message: 'You are not assigned to a store' });
+      throw new ORPCError('FORBIDDEN', { message: STORE_SCOPE_UNASSIGNED_MESSAGE });
     }
     return user.assignedStoreId;
   }
   if (!requestedStoreId) {
-    throw new ORPCError('BAD_REQUEST', { message: 'A target store is required' });
+    throw new ORPCError('BAD_REQUEST', { message: STORE_SCOPE_TARGET_REQUIRED_MESSAGE });
   }
   return requestedStoreId;
 }

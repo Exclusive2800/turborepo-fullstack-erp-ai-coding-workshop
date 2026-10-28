@@ -65,3 +65,14 @@ export const SALE_LINES_REQUIRED_MESSAGE =
 /** The same product appeared on more than one sale line (SAL-01). The user must correct the input. */
 export const SALE_DUPLICATE_PRODUCT_MESSAGE =
   'มีสินค้าซ้ำกันในรายการขายเดียวกัน กรุณารวมเป็นรายการเดียวหรือลบรายการที่ซ้ำ';
+
+/** A store-scoped user acted for a store that is not theirs. The user cannot retry; it is forbidden. */
+export const STORE_SCOPE_FORBIDDEN_MESSAGE =
+  'คุณไม่มีสิทธิ์ทำรายการสำหรับสาขานี้ กรุณาทำรายการเฉพาะสาขาที่คุณได้รับมอบหมาย';
+
+/** A store-scoped user has no assigned store, so no store can be derived. The user cannot retry. */
+export const STORE_SCOPE_UNASSIGNED_MESSAGE =
+  'บัญชีของคุณยังไม่ได้ถูกกำหนดสาขา กรุณาติดต่อผู้ดูแลระบบเพื่อกำหนดสาขาก่อนทำรายการ';
+
+/** A cross-store user did not name a target store (INV). The user must choose a store. */
+export const STORE_SCOPE_TARGET_REQUIRED_MESSAGE = 'กรุณาเลือกสาขาที่ต้องการทำรายการ';
