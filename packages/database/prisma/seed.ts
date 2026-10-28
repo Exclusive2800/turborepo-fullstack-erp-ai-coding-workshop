@@ -241,21 +241,52 @@ async function main() {
     }
   }
 
-  // Reset to exactly the fixture: drop any account, store or supplier left over from an earlier
-  // seed, so a reseed over an existing database matches a fresh one.
+  // Reset to exactly the fixture: drop anything left over from an earlier seed or from tests that
+  // created data through the live API (the e2e suite adds stores/products/orders), so a reseed over
+  // a used database matches a fresh one. Order matters: StockMovement/StockBalance,
+  // PurchaseOrder(Line) and the master rows are linked by Restrict/relation foreign keys, so the
+  // dependent rows for a non-fixture store or product must go before the master row they reference.
+  const fixtureStoreCodes = stores.map((store) => store.code);
+  const fixtureProductSkus = products.map((product) => product.sku);
+  const nonFixtureStores = await prisma.store.findMany({
+    where: { code: { notIn: fixtureStoreCodes } },
+    select: { id: true },
+  });
+  const nonFixtureProducts = await prisma.product.findMany({
+    where: { sku: { notIn: fixtureProductSkus } },
+    select: { id: true },
+  });
+  const staleStoreIds = nonFixtureStores.map((store) => store.id);
+  const staleProductIds = nonFixtureProducts.map((product) => product.id);
+
+  // Purchase orders first (they reference supplier/store/product); PO-DEMO-001 is kept, everything
+  // else — including any order that points at a store/product we are about to drop — goes. Lines
+  // cascade from the order.
+  await prisma.purchaseOrder.deleteMany({ where: { number: { notIn: [PO_DEMO_NUMBER] } } });
+
+  // Ledger rows that reference a store or product we are about to drop. The fixture products' own
+  // movements/balances were already reset above; this clears the rows tests created elsewhere so
+  // the Restrict foreign keys don't block the master-row deletes below.
+  if (staleStoreIds.length > 0 || staleProductIds.length > 0) {
+    const staleRefFilter = {
+      OR: [
+        ...(staleStoreIds.length > 0 ? [{ storeId: { in: staleStoreIds } }] : []),
+        ...(staleProductIds.length > 0 ? [{ productId: { in: staleProductIds } }] : []),
+      ],
+    };
+    await prisma.stockMovement.deleteMany({ where: staleRefFilter });
+    await prisma.stockBalance.deleteMany({ where: staleRefFilter });
+  }
+
+  // Now the master rows. Users first (an assignedStore FK points at Store).
   await prisma.user.deleteMany({
     where: { email: { notIn: demoUsers.map((user) => user.email) } },
   });
-  await prisma.store.deleteMany({ where: { code: { notIn: stores.map((store) => store.code) } } });
+  await prisma.store.deleteMany({ where: { code: { notIn: fixtureStoreCodes } } });
   await prisma.supplier.deleteMany({
     where: { code: { notIn: suppliers.map((supplier) => supplier.code) } },
   });
-  await prisma.product.deleteMany({
-    where: { sku: { notIn: products.map((product) => product.sku) } },
-  });
-  // Reset purchase orders to exactly the fixture: drop any order other than PO-DEMO-001 (its lines
-  // cascade). Keeps a reseed over an existing database identical to a fresh one.
-  await prisma.purchaseOrder.deleteMany({ where: { number: { notIn: [PO_DEMO_NUMBER] } } });
+  await prisma.product.deleteMany({ where: { sku: { notIn: fixtureProductSkus } } });
 
   console.log(
     `Seeded ${stores.length} stores, ${suppliers.length} suppliers, ${products.length} products (B01 opening stock via the ledger: SKU001=${B01_OPENING.SKU001}, SKU002=${B01_OPENING.SKU002}, SKU003=${B01_OPENING.SKU003}; B02 all zero) and ${demoUsers.length} demo users (password: "${DEMO_PASSWORD}").`,
