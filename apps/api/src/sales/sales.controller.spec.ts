@@ -80,17 +80,15 @@ const createInput = { lines: [{ productId: 'p1', quantity: 2 }] };
 describe('SalesController', () => {
   describe('create', () => {
     it('creates a DRAFT sale for the staff user’s assigned store, derived from the principal', async () => {
-      const findMany = vi
-        .fn()
-        .mockResolvedValue([
-          {
-            id: 'p1',
-            sku: 'SKU001',
-            name: 'Drinking water pack of 6',
-            active: true,
-            sellingPrice: money(60),
-          },
-        ]);
+      const findMany = vi.fn().mockResolvedValue([
+        {
+          id: 'p1',
+          sku: 'SKU001',
+          name: 'Drinking water pack of 6',
+          active: true,
+          sellingPrice: money(60),
+        },
+      ]);
       const { controller, saleCreate } = await createController({ product: { findMany } });
 
       const result = await call(controller.create(staffB01), createInput);
@@ -154,17 +152,15 @@ describe('SalesController', () => {
     });
 
     it('writes no stock movement and opens no transaction for a draft sale (SAL-03)', async () => {
-      const findMany = vi
-        .fn()
-        .mockResolvedValue([
-          {
-            id: 'p1',
-            sku: 'SKU001',
-            name: 'Drinking water pack of 6',
-            active: true,
-            sellingPrice: money(60),
-          },
-        ]);
+      const findMany = vi.fn().mockResolvedValue([
+        {
+          id: 'p1',
+          sku: 'SKU001',
+          name: 'Drinking water pack of 6',
+          active: true,
+          sellingPrice: money(60),
+        },
+      ]);
       const { controller, $transaction } = await createController({ product: { findMany } });
 
       await call(controller.create(staffB01), createInput);
@@ -200,17 +196,15 @@ describe('SalesController', () => {
     });
 
     it('rejects a staff user who is not assigned to any store (cannot derive a store)', async () => {
-      const findMany = vi
-        .fn()
-        .mockResolvedValue([
-          {
-            id: 'p1',
-            sku: 'SKU001',
-            name: 'Drinking water pack of 6',
-            active: true,
-            sellingPrice: money(60),
-          },
-        ]);
+      const findMany = vi.fn().mockResolvedValue([
+        {
+          id: 'p1',
+          sku: 'SKU001',
+          name: 'Drinking water pack of 6',
+          active: true,
+          sellingPrice: money(60),
+        },
+      ]);
       const { controller, saleCreate } = await createController({ product: { findMany } });
 
       await expect(call(controller.create(staffUnassigned), createInput)).rejects.toMatchObject({
