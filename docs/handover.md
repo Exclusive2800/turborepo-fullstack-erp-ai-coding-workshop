@@ -173,6 +173,32 @@ Postgres up it starts the API and a `vite preview` itself. The last report or a 
 Two known test-infrastructure limitations (a missing Postgres service on the CI `check` job, and an
 e2e worker-startup race) are documented in [`docs/known-limitations.md`](known-limitations.md).
 
+## Performance (NFR-05)
+
+NFR-05 requires that, in an agreed test environment with 1,000 products, 10,000 movements, and 10
+simulated concurrent users, the search and stock-view APIs hold a p95 response time of no more than
+2 seconds over a continuous 5-minute run (CSV export excluded). The load test drives the two named
+endpoints — stock search (`GET /stock`) and the stock-on-hand report (`GET /reports/stock-on-hand`)
+— through the real controllers over a real Postgres, measures per-endpoint p95, and fails if the
+threshold is exceeded.
+
+Run the continuous 5-minute Demo against a running, seeded Postgres and write the latency report:
+
+```bash
+pnpm --filter @erp/api load:nfr-05
+```
+
+It seeds the NFR-05 fixture into a dedicated store, runs the load, tears the fixture down, and saves
+the evidence artifact to [`docs/evidence/nfr-05-load-report.md`](evidence/nfr-05-load-report.md),
+exiting non-zero if any endpoint's p95 exceeds 2 seconds. Override the duration or concurrency for a
+quick smoke with `LOAD_DURATION_MS` and `LOAD_CONCURRENCY`. The same load, bounded, runs inside
+`pnpm test` as `apps/api/src/test/load/nfr-05-load.integration.spec.ts`, which asserts the p95
+threshold and — like the other real-Postgres integration specs — skips loudly when no database is
+reachable (so it runs locally and under the `e2e` database but is skipped on the DB-less CI `check`
+job; see [`docs/known-limitations.md`](known-limitations.md)).
+
+The latest recorded run: [`docs/evidence/nfr-05-load-report.md`](evidence/nfr-05-load-report.md).
+
 ## API documentation
 
 The API is contract-first: [`packages/contracts`](../packages/contracts) is the single source of

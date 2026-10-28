@@ -12,7 +12,8 @@
     "start": "node dist/main.js",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "load:nfr-05": "tsx src/load/nfr-05-load.run.ts"
   },
   "dependencies": {
     "@erp/contracts": "workspace:*",
@@ -39,6 +40,7 @@
     "@types/node": "^24.0.0",
     "eslint": "^10.13.0",
     "typescript": "~6.0.3",
+    "tsx": "^4.23.15",
     "vitest": "^5.0.5"
   }
 }
