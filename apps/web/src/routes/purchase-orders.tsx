@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import type { PurchaseOrderCreateInput } from '@erp/contracts';
+import type { PurchaseOrder, PurchaseOrderCreateInput } from '@erp/contracts';
 import { ListStates } from '@/components/list-states';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -221,6 +221,103 @@ function DraftPurchaseOrderForm() {
   );
 }
 
+/**
+ * The lifecycle actions available on one order row, gated by the viewer's role and the order's
+ * current status (the server enforces the authoritative transition table either way, PO-03):
+ *
+ * - PURCHASING sees "ส่งอนุมัติ" on a DRAFT (submit → PENDING_APPROVAL) and "ยกเลิก" on a
+ *   DRAFT/PENDING_APPROVAL order (cancel, with a reason — the server checks they are the creator).
+ * - MANAGER sees "อนุมัติ"/"ปฏิเสธ" on a PENDING_APPROVAL order (approve / reject with a reason) and
+ *   "ยกเลิก" on a DRAFT/PENDING_APPROVAL order.
+ *
+ * Reject and cancel prompt for the mandatory reason before calling the API. A rejected or cancelled
+ * order has no action — it is terminal.
+ */
+function PurchaseOrderActions({ order }: { order: PurchaseOrder }) {
+  const user = useCurrentUser();
+  const queryClient = useQueryClient();
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: orpc.purchaseOrder.list.key() });
+
+  const submit = useMutation(orpc.purchaseOrder.submit.mutationOptions({ onSuccess: invalidate }));
+  const approve = useMutation(
+    orpc.purchaseOrder.approve.mutationOptions({ onSuccess: invalidate }),
+  );
+  const reject = useMutation(orpc.purchaseOrder.reject.mutationOptions({ onSuccess: invalidate }));
+  const cancel = useMutation(orpc.purchaseOrder.cancel.mutationOptions({ onSuccess: invalidate }));
+
+  const role = user?.role;
+  const isManager = role === 'MANAGER';
+  const isPurchasing = role === 'PURCHASING';
+  const cancellable = order.status === 'DRAFT' || order.status === 'PENDING_APPROVAL';
+
+  const promptReason = (label: string): string | null => {
+    const reason = window.prompt(label)?.trim();
+    return reason && reason.length > 0 ? reason : null;
+  };
+
+  const error = submit.error ?? approve.error ?? reject.error ?? cancel.error ?? null;
+  const pending = submit.isPending || approve.isPending || reject.isPending || cancel.isPending;
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {isPurchasing && order.status === 'DRAFT' && (
+        <Button
+          type="button"
+          size="sm"
+          disabled={pending}
+          onClick={() => submit.mutate({ id: order.id })}
+        >
+          ส่งอนุมัติ
+        </Button>
+      )}
+      {isManager && order.status === 'PENDING_APPROVAL' && (
+        <>
+          <Button
+            type="button"
+            size="sm"
+            disabled={pending}
+            onClick={() => approve.mutate({ id: order.id })}
+          >
+            อนุมัติ
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={pending}
+            onClick={() => {
+              const reason = promptReason('กรุณาระบุเหตุผลในการปฏิเสธใบสั่งซื้อ');
+              if (reason) reject.mutate({ id: order.id, reason });
+            }}
+          >
+            ปฏิเสธ
+          </Button>
+        </>
+      )}
+      {(isManager || isPurchasing) && cancellable && (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled={pending}
+          onClick={() => {
+            const reason = promptReason('กรุณาระบุเหตุผลในการยกเลิกใบสั่งซื้อ');
+            if (reason) cancel.mutate({ id: order.id, reason });
+          }}
+        >
+          ยกเลิก
+        </Button>
+      )}
+      {error && (
+        <p role="alert" className="text-sm text-destructive">
+          {apiErrorMessage(error)}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function PurchaseOrdersPage() {
   const user = useCurrentUser();
   const isPurchasing = user?.role === 'PURCHASING';
@@ -253,6 +350,7 @@ export function PurchaseOrdersPage() {
                   <th className="py-2">สถานะ</th>
                   <th className="py-2">จำนวนรายการ</th>
                   <th className="py-2">ยอดรวม</th>
+                  <th className="py-2">การดำเนินการ</th>
                 </tr>
               </thead>
               <tbody>
@@ -264,6 +362,9 @@ export function PurchaseOrdersPage() {
                     </td>
                     <td className="py-2">{order.lines.length}</td>
                     <td className="py-2">{order.total}</td>
+                    <td className="py-2">
+                      <PurchaseOrderActions order={order} />
+                    </td>
                   </tr>
                 ))}
               </tbody>

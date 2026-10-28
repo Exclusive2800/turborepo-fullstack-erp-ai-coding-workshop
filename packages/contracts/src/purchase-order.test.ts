@@ -1,13 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import {
+  PO_CANCEL_REASON_REQUIRED_MESSAGE,
   PO_DUPLICATE_SKU_MESSAGE,
   PO_LINES_REQUIRED_MESSAGE,
   PO_QUANTITY_POSITIVE_MESSAGE,
+  PO_REJECT_REASON_REQUIRED_MESSAGE,
   PO_UNIT_PRICE_NONNEGATIVE_MESSAGE,
 } from './errors.js';
 import {
+  findPurchaseOrderTransition,
+  PO_TRANSITIONS,
+  PurchaseOrderCancelInputSchema,
   PurchaseOrderCreateInputSchema,
   PurchaseOrderLineInputSchema,
+  PurchaseOrderRejectInputSchema,
   PurchaseOrderSchema,
   PurchaseOrderStatusSchema,
 } from './purchase-order.js';
@@ -133,6 +139,7 @@ describe('PurchaseOrderSchema', () => {
     id: 'po1',
     number: 'PO-000001',
     status: 'DRAFT',
+    statusReason: null,
     supplierId: 'sup1',
     storeId: 's1',
     expectedReceiptDate: '2026-02-01T00:00:00.000Z',
@@ -162,5 +169,102 @@ describe('PurchaseOrderSchema', () => {
       lines: [{ ...order.lines[0], quantity: 1.5 }],
     });
     expect(result.success).toBe(false);
+  });
+
+  it('accepts a rejected order carrying its reason', () => {
+    const result = PurchaseOrderSchema.safeParse({
+      ...order,
+      status: 'REJECTED',
+      statusReason: 'ราคาสูงเกินไป',
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
+describe('PO_TRANSITIONS authoritative table', () => {
+  it('maps each (action, from) pair to exactly one transition', () => {
+    const seen = new Set<string>();
+    for (const transition of PO_TRANSITIONS) {
+      const key = `${transition.action}:${transition.from}`;
+      expect(seen.has(key), `duplicate transition ${key}`).toBe(false);
+      seen.add(key);
+    }
+  });
+
+  it('encodes the submit → approve → reject lifecycle with the right roles and reasons', () => {
+    const submit = findPurchaseOrderTransition('submit', 'DRAFT');
+    expect(submit).toMatchObject({
+      to: 'PENDING_APPROVAL',
+      who: ['PURCHASING'],
+      requiresReason: false,
+    });
+
+    const approve = findPurchaseOrderTransition('approve', 'PENDING_APPROVAL');
+    expect(approve).toMatchObject({ to: 'APPROVED', who: ['MANAGER'], requiresReason: false });
+
+    const reject = findPurchaseOrderTransition('reject', 'PENDING_APPROVAL');
+    expect(reject).toMatchObject({ to: 'REJECTED', who: ['MANAGER'], requiresReason: true });
+  });
+
+  it('allows cancel only from DRAFT or PENDING_APPROVAL, by creator or manager, with a reason', () => {
+    for (const from of ['DRAFT', 'PENDING_APPROVAL'] as const) {
+      const cancel = findPurchaseOrderTransition('cancel', from);
+      expect(cancel).toMatchObject({ to: 'CANCELLED', requiresReason: true });
+      expect(cancel?.who).toEqual(expect.arrayContaining(['creator', 'MANAGER']));
+    }
+    // No cancel from APPROVED or later (PO-04).
+    for (const from of ['APPROVED', 'PARTIALLY_RECEIVED', 'COMPLETED'] as const) {
+      expect(findPurchaseOrderTransition('cancel', from)).toBeUndefined();
+    }
+  });
+
+  it('has no transition out of a terminal REJECTED or CANCELLED order', () => {
+    for (const from of ['REJECTED', 'CANCELLED'] as const) {
+      const out = PO_TRANSITIONS.filter((t) => t.from === from);
+      expect(out).toEqual([]);
+    }
+  });
+
+  it('returns undefined for an illegal transition (e.g. approve a DRAFT, submit an APPROVED)', () => {
+    expect(findPurchaseOrderTransition('approve', 'DRAFT')).toBeUndefined();
+    expect(findPurchaseOrderTransition('submit', 'APPROVED')).toBeUndefined();
+    expect(findPurchaseOrderTransition('reject', 'APPROVED')).toBeUndefined();
+  });
+});
+
+describe('PurchaseOrderRejectInputSchema', () => {
+  it('rejects a blank reason with the actionable Thai message', () => {
+    const result = PurchaseOrderRejectInputSchema.safeParse({ id: 'po1', reason: '   ' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.message).toBe(PO_REJECT_REASON_REQUIRED_MESSAGE);
+    }
+  });
+
+  it('accepts and trims a non-empty reason', () => {
+    const result = PurchaseOrderRejectInputSchema.safeParse({
+      id: 'po1',
+      reason: '  ราคาสูงเกินไป  ',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.reason).toBe('ราคาสูงเกินไป');
+    }
+  });
+});
+
+describe('PurchaseOrderCancelInputSchema', () => {
+  it('rejects a blank reason with the actionable Thai message', () => {
+    const result = PurchaseOrderCancelInputSchema.safeParse({ id: 'po1', reason: '' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.message).toBe(PO_CANCEL_REASON_REQUIRED_MESSAGE);
+    }
+  });
+
+  it('accepts a non-empty reason', () => {
+    expect(PurchaseOrderCancelInputSchema.safeParse({ id: 'po1', reason: 'สั่งซ้ำ' }).success).toBe(
+      true,
+    );
   });
 });

@@ -1,6 +1,10 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { EMPTY_LIST_MESSAGE, PO_DUPLICATE_SKU_MESSAGE } from '@erp/contracts';
+import {
+  EMPTY_LIST_MESSAGE,
+  PO_APPROVED_FROZEN_MESSAGE,
+  PO_DUPLICATE_SKU_MESSAGE,
+} from '@erp/contracts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createQueryClient } from '@/lib/query-client';
 import { conflict, mockApi } from '@/test/mock-api';
@@ -8,6 +12,7 @@ import { PurchaseOrdersPage } from './purchase-orders';
 
 const buyer = { id: '1', email: 'buyer01@erp.local', name: 'Buyer One', role: 'PURCHASING' };
 const staff = { id: '2', email: 'staff_b01@erp.local', name: 'Staff B01', role: 'STAFF' };
+const manager = { id: '3', email: 'manager01@erp.local', name: 'Manager One', role: 'MANAGER' };
 
 function renderPage() {
   return render(
@@ -77,6 +82,7 @@ const draftOrder = {
   id: 'po1',
   number: 'PO-000001',
   status: 'DRAFT',
+  statusReason: null,
   supplierId: 'sup1',
   storeId: 's1',
   expectedReceiptDate: '2026-02-01T00:00:00.000Z',
@@ -108,7 +114,10 @@ function referenceData(extra: Record<string, unknown> = {}) {
 }
 
 describe('PurchaseOrdersPage', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
 
   it('shows a loading state before the order list resolves', () => {
     mockApi(referenceData());
@@ -215,5 +224,112 @@ describe('PurchaseOrdersPage', () => {
     // The list still renders, but there is no create form for a store employee.
     await screen.findByText(EMPTY_LIST_MESSAGE);
     expect(screen.queryByLabelText('ผู้จัดจำหน่าย')).not.toBeInTheDocument();
+  });
+
+  it('lets a PURCHASING user submit a DRAFT order for approval', async () => {
+    const submitted = { ...draftOrder, status: 'PENDING_APPROVAL' };
+    const fetch = mockApi(
+      referenceData({
+        'GET /purchase-orders': list([draftOrder]),
+        'POST /purchase-orders/po1/submit': submitted,
+      }),
+    );
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ส่งอนุมัติ' }));
+
+    await waitFor(() => {
+      const post = fetch.mock.calls.find(([r]) => r.method === 'POST');
+      expect(post).toBeTruthy();
+      expect(new URL(post![0].url).pathname).toBe('/api/purchase-orders/po1/submit');
+    });
+  });
+
+  it('lets a MANAGER approve a PENDING_APPROVAL order', async () => {
+    const pending = { ...draftOrder, status: 'PENDING_APPROVAL' };
+    const approved = { ...pending, status: 'APPROVED' };
+    const fetch = mockApi(
+      referenceData({
+        'GET /auth/me': { user: manager },
+        'GET /purchase-orders': list([pending]),
+        'POST /purchase-orders/po1/approve': approved,
+      }),
+    );
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'อนุมัติ' }));
+
+    await waitFor(() => {
+      const post = fetch.mock.calls.find(([r]) => r.method === 'POST');
+      expect(post).toBeTruthy();
+      expect(new URL(post![0].url).pathname).toBe('/api/purchase-orders/po1/approve');
+    });
+  });
+
+  it('lets a MANAGER reject a PENDING_APPROVAL order with a prompted reason', async () => {
+    const pending = { ...draftOrder, status: 'PENDING_APPROVAL' };
+    const rejected = { ...pending, status: 'REJECTED', statusReason: 'ราคาสูงเกินไป' };
+    const fetch = mockApi(
+      referenceData({
+        'GET /auth/me': { user: manager },
+        'GET /purchase-orders': list([pending]),
+        'POST /purchase-orders/po1/reject': rejected,
+      }),
+    );
+    vi.spyOn(window, 'prompt').mockReturnValue('ราคาสูงเกินไป');
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ปฏิเสธ' }));
+
+    await waitFor(() => {
+      const post = fetch.mock.calls.find(([r]) => r.method === 'POST');
+      expect(post).toBeTruthy();
+      expect(new URL(post![0].url).pathname).toBe('/api/purchase-orders/po1/reject');
+    });
+    const post = fetch.mock.calls.find(([r]) => r.method === 'POST')![0];
+    await expect(post.json()).resolves.toMatchObject({ reason: 'ราคาสูงเกินไป' });
+  });
+
+  it('does not reject when the manager dismisses the reason prompt', async () => {
+    const pending = { ...draftOrder, status: 'PENDING_APPROVAL' };
+    const fetch = mockApi(
+      referenceData({
+        'GET /auth/me': { user: manager },
+        'GET /purchase-orders': list([pending]),
+        'POST /purchase-orders/po1/reject': { ...pending, status: 'REJECTED' },
+      }),
+    );
+    vi.spyOn(window, 'prompt').mockReturnValue(null);
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ปฏิเสธ' }));
+
+    // Give any (unwanted) request a tick; none should have been sent.
+    await Promise.resolve();
+    expect(fetch.mock.calls.find(([r]) => r.method === 'POST')).toBeFalsy();
+  });
+
+  it('shows the actionable Thai message when cancelling an approved order is rejected', async () => {
+    // A PENDING_APPROVAL order still shows the manager's ยกเลิก button; the server refuses the
+    // cancel once the order is frozen and returns the approved-frozen message, which the row shows.
+    const pending = { ...draftOrder, status: 'PENDING_APPROVAL' };
+    mockApi(
+      referenceData({
+        'GET /auth/me': { user: manager },
+        'GET /purchase-orders': list([pending]),
+        'POST /purchase-orders/po1/cancel': conflict(PO_APPROVED_FROZEN_MESSAGE),
+      }),
+    );
+    vi.spyOn(window, 'prompt').mockReturnValue('สายไป');
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ยกเลิก' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('อนุมัติแล้ว');
   });
 });
