@@ -264,6 +264,11 @@ async function main() {
   // cascade from the order.
   await prisma.purchaseOrder.deleteMany({ where: { number: { notIn: [PO_DEMO_NUMBER] } } });
 
+  // Sales are not part of the Section 8 fixture, so drop every sale (its lines cascade). This also
+  // clears the SaleLine rows that reference a product we are about to delete, which would otherwise
+  // block the product delete below on the SaleLine_productId foreign key.
+  await prisma.sale.deleteMany({});
+
   // Ledger rows that reference a store or product we are about to drop. The fixture products' own
   // movements/balances were already reset above; this clears the rows tests created elsewhere so
   // the Restrict foreign keys don't block the master-row deletes below.
