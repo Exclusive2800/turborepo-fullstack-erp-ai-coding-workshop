@@ -68,6 +68,10 @@ export class ReportsController {
    * threshold exists for that product in that store and the on-hand quantity is AT OR BELOW it
    * (`quantity <= threshold`) — the same rule the stock-search screen uses, so a product at balance 0
    * with threshold 3 is low-stock because 0 ≤ 3. Rows are ordered by store code then SKU.
+   *
+   * The report enumerates maintained `StockBalance` rows: a product is represented by its balance row
+   * (including an explicit zero-quantity row, which the seed and the ledger write for every
+   * product/store), so an absent balance row means the product is simply not reported for that store.
    */
   private async onHandRows(
     storeId: string | undefined,
