@@ -54,6 +54,14 @@ const manager = {
   assignedStoreId: null,
 };
 
+const staffB01 = {
+  id: 'u-staff',
+  email: 'staff_b01@erp.local',
+  name: 'Staff B01',
+  role: 'STAFF' as const,
+  assignedStoreId: 's1',
+};
+
 describe('StockController', () => {
   describe('search', () => {
     it('returns quantity, unit, threshold and a false low-stock flag when above threshold', async () => {
@@ -67,7 +75,7 @@ describe('StockController', () => {
         productStoreThreshold: { findMany: thresholdFindMany },
       });
 
-      const result = await call(controller.search(), { page: 1, pageSize: 20 });
+      const result = await call(controller.search(manager), { page: 1, pageSize: 20 });
 
       expect(result.items[0]).toMatchObject({
         productId: 'p1',
@@ -93,7 +101,7 @@ describe('StockController', () => {
         productStoreThreshold: { findMany: thresholdFindMany },
       });
 
-      const result = await call(controller.search(), { page: 1, pageSize: 20 });
+      const result = await call(controller.search(manager), { page: 1, pageSize: 20 });
 
       expect(result.items[0]).toMatchObject({ quantity: 3, lowStock: true });
     });
@@ -108,7 +116,7 @@ describe('StockController', () => {
         productStoreThreshold: { findMany: thresholdFindMany },
       });
 
-      const result = await call(controller.search(), { page: 1, pageSize: 20 });
+      const result = await call(controller.search(manager), { page: 1, pageSize: 20 });
 
       expect(result.items).toHaveLength(1);
       expect(result.items[0]).toMatchObject({ quantity: 0, lowStock: true });
@@ -122,7 +130,7 @@ describe('StockController', () => {
         productStoreThreshold: { findMany: thresholdFindMany },
       });
 
-      const result = await call(controller.search(), { page: 1, pageSize: 20 });
+      const result = await call(controller.search(manager), { page: 1, pageSize: 20 });
 
       expect(result.items[0]).toMatchObject({ reorderThreshold: null, lowStock: false });
     });
@@ -135,13 +143,63 @@ describe('StockController', () => {
         productStoreThreshold: { findMany: vi.fn().mockResolvedValue([]) },
       });
 
-      await call(controller.search(), { page: 1, pageSize: 20, query: 'water', storeId: 's1' });
+      await call(controller.search(manager), {
+        page: 1,
+        pageSize: 20,
+        query: 'water',
+        storeId: 's1',
+      });
 
       const where = findMany.mock.calls[0]?.[0]?.where;
       expect(where).toMatchObject({ storeId: 's1' });
       // The query matches SKU or product name case-insensitively.
       expect(JSON.stringify(where)).toContain('water');
       expect(JSON.stringify(where).toLowerCase()).toContain('insensitive');
+    });
+
+    // Store scope (RPT-03, user story 3): a STAFF reader is pinned to their assigned store even
+    // when the request names another store, and a cross-store MANAGER reads every store or one.
+    it('forces a STAFF caller to their assigned store, ignoring a storeId in the request', async () => {
+      const findMany = vi.fn().mockResolvedValue([]);
+      const controller = await createController({
+        stockBalance: { findMany, count: vi.fn().mockResolvedValue(0) },
+        productStoreThreshold: { findMany: vi.fn().mockResolvedValue([]) },
+      });
+
+      // staff_b01 is assigned to s1 but asks for s2; the handler must scope to s1.
+      await call(controller.search(staffB01), { page: 1, pageSize: 20, storeId: 's2' });
+
+      expect(findMany.mock.calls[0]?.[0]?.where).toMatchObject({ storeId: 's1' });
+    });
+
+    it('rejects an unassigned STAFF caller', async () => {
+      const findMany = vi.fn().mockResolvedValue([]);
+      const controller = await createController({
+        stockBalance: { findMany, count: vi.fn().mockResolvedValue(0) },
+        productStoreThreshold: { findMany: vi.fn().mockResolvedValue([]) },
+      });
+
+      await expect(
+        call(controller.search({ ...staffB01, assignedStoreId: null }), {
+          page: 1,
+          pageSize: 20,
+        }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(findMany).not.toHaveBeenCalled();
+    });
+
+    it('leaves a MANAGER unscoped when no store is named, and scoped when one is', async () => {
+      const findMany = vi.fn().mockResolvedValue([]);
+      const controller = await createController({
+        stockBalance: { findMany, count: vi.fn().mockResolvedValue(0) },
+        productStoreThreshold: { findMany: vi.fn().mockResolvedValue([]) },
+      });
+
+      await call(controller.search(manager), { page: 1, pageSize: 20 });
+      expect(findMany.mock.calls[0]?.[0]?.where).not.toHaveProperty('storeId');
+
+      await call(controller.search(manager), { page: 1, pageSize: 20, storeId: 's2' });
+      expect(findMany.mock.calls[1]?.[0]?.where).toMatchObject({ storeId: 's2' });
     });
   });
 
@@ -164,7 +222,7 @@ describe('StockController', () => {
       const count = vi.fn().mockResolvedValue(1);
       const controller = await createController({ stockMovement: { findMany, count } });
 
-      const result = await call(controller.movements(), { page: 1, pageSize: 20 });
+      const result = await call(controller.movements(manager), { page: 1, pageSize: 20 });
 
       expect(result.items[0]).toMatchObject({
         id: 'm1',
@@ -184,7 +242,7 @@ describe('StockController', () => {
         stockMovement: { findMany, count: vi.fn().mockResolvedValue(0) },
       });
 
-      await call(controller.movements(), {
+      await call(controller.movements(manager), {
         page: 1,
         pageSize: 20,
         productId: 'p1',
@@ -197,6 +255,48 @@ describe('StockController', () => {
         storeId: 's1',
         type: 'SALE',
       });
+    });
+
+    // Store scope (RPT-03, user story 3): the ledger read is pinned to a STAFF caller's assigned
+    // store so they cannot read another store's movements, and a MANAGER reads every store or one.
+    it('forces a STAFF caller to their assigned store, ignoring a storeId in the request', async () => {
+      const findMany = vi.fn().mockResolvedValue([]);
+      const controller = await createController({
+        stockMovement: { findMany, count: vi.fn().mockResolvedValue(0) },
+      });
+
+      // staff_b01 is assigned to s1 but asks for s2; the handler must scope to s1.
+      await call(controller.movements(staffB01), { page: 1, pageSize: 20, storeId: 's2' });
+
+      expect(findMany.mock.calls[0]?.[0]?.where).toMatchObject({ storeId: 's1' });
+    });
+
+    it('rejects an unassigned STAFF caller', async () => {
+      const findMany = vi.fn().mockResolvedValue([]);
+      const controller = await createController({
+        stockMovement: { findMany, count: vi.fn().mockResolvedValue(0) },
+      });
+
+      await expect(
+        call(controller.movements({ ...staffB01, assignedStoreId: null }), {
+          page: 1,
+          pageSize: 20,
+        }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(findMany).not.toHaveBeenCalled();
+    });
+
+    it('leaves a MANAGER unscoped when no store is named, and scoped when one is', async () => {
+      const findMany = vi.fn().mockResolvedValue([]);
+      const controller = await createController({
+        stockMovement: { findMany, count: vi.fn().mockResolvedValue(0) },
+      });
+
+      await call(controller.movements(manager), { page: 1, pageSize: 20 });
+      expect(findMany.mock.calls[0]?.[0]?.where).not.toHaveProperty('storeId');
+
+      await call(controller.movements(manager), { page: 1, pageSize: 20, storeId: 's2' });
+      expect(findMany.mock.calls[1]?.[0]?.where).toMatchObject({ storeId: 's2' });
     });
   });
 

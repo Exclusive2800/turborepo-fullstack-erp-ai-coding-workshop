@@ -10,6 +10,7 @@ import {
 } from '@erp/contracts';
 import { Implement, implement, ORPCError } from '@orpc/nest';
 import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { resolveReadStoreScope } from '../auth/store-scope.js';
 import { PrismaService } from '../database/prisma.service.js';
 import { StockPostingService } from './stock-posting.service.js';
 
@@ -53,10 +54,14 @@ function serializeMovement(row: MovementRow): StockMovement {
   };
 }
 
-/** Build the balance `where` clause from the search filters (INV-01). */
-function searchWhere(input: StockSearchInput) {
+/**
+ * Build the balance `where` clause from the search filters (INV-01). The store scope is the
+ * authoritative, principal-derived value (`null` = every store for a cross-store reader), NEVER the
+ * raw `input.storeId` — see {@link resolveReadStoreScope}.
+ */
+function searchWhere(input: StockSearchInput, scopedStoreId: string | null) {
   const where: Record<string, unknown> = {};
-  if (input.storeId) where.storeId = input.storeId;
+  if (scopedStoreId) where.storeId = scopedStoreId;
   if (input.query) {
     where.product = {
       OR: [
@@ -68,11 +73,15 @@ function searchWhere(input: StockSearchInput) {
   return where;
 }
 
-/** Build the movement-history `where` clause (#19). */
-function movementWhere(input: StockMovementListInput) {
+/**
+ * Build the movement-history `where` clause (#19). The store scope is the authoritative,
+ * principal-derived value (`null` = every store for a cross-store reader), NEVER the raw
+ * `input.storeId` — see {@link resolveReadStoreScope}.
+ */
+function movementWhere(input: StockMovementListInput, scopedStoreId: string | null) {
   const where: Record<string, unknown> = {};
   if (input.productId) where.productId = input.productId;
-  if (input.storeId) where.storeId = input.storeId;
+  if (scopedStoreId) where.storeId = scopedStoreId;
   if (input.type) where.type = input.type;
   return where;
 }
@@ -84,10 +93,18 @@ export class StockController {
     private readonly posting: StockPostingService,
   ) {}
 
+  /**
+   * Stock search (INV-01, user story 11). Open to any signed-in user (no `@Roles`) so store
+   * employees can check availability, but store-scoped from the authenticated principal: a STAFF
+   * caller only ever sees their assigned store's balances (whatever `storeId` the request names),
+   * while a cross-store role (ADMIN/MANAGER/PURCHASING) sees every store or the one it names. The
+   * scope is derived via {@link resolveReadStoreScope}, never trusted from the request body (RPT-03).
+   */
   @Implement(contract.stock.search)
-  search() {
+  search(@CurrentUser() user: Whoami) {
     return implement(contract.stock.search).handler(async ({ input }) => {
-      const where = searchWhere(input);
+      const scopedStoreId = resolveReadStoreScope(user, input.storeId);
+      const where = searchWhere(input, scopedStoreId);
       const { page, pageSize } = input;
       const [rows, total] = await Promise.all([
         this.prisma.stockBalance.findMany({
@@ -133,10 +150,18 @@ export class StockController {
     });
   }
 
+  /**
+   * Ledger movement list (#19). Open to any signed-in user (no `@Roles`) but store-scoped from the
+   * authenticated principal exactly like {@link search}: a STAFF caller only ever reads their
+   * assigned store's movements (whatever `storeId` the request names), while a cross-store role
+   * reads every store or the one it names. The scope is derived via {@link resolveReadStoreScope},
+   * never trusted from the request body (RPT-03).
+   */
   @Implement(contract.stock.movements)
-  movements() {
+  movements(@CurrentUser() user: Whoami) {
     return implement(contract.stock.movements).handler(async ({ input }) => {
-      const where = movementWhere(input);
+      const scopedStoreId = resolveReadStoreScope(user, input.storeId);
+      const where = movementWhere(input, scopedStoreId);
       const { page, pageSize } = input;
       const [rows, total] = await Promise.all([
         this.prisma.stockMovement.findMany({

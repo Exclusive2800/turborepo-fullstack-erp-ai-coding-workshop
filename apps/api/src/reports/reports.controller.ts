@@ -4,7 +4,6 @@ import {
   type CsvExport,
   type DailySalesReport,
   type DailySalesReportInput,
-  isCrossStoreRole,
   type LowStockReport,
   type MovementHistoryReport,
   type MovementHistoryReportInput,
@@ -12,12 +11,12 @@ import {
   reportingDayInterval,
   type StockItem,
   type StockOnHandReport,
-  STORE_SCOPE_UNASSIGNED_MESSAGE,
   toCsv,
   type Whoami,
 } from '@erp/contracts';
-import { Implement, implement, ORPCError } from '@orpc/nest';
+import { Implement, implement } from '@orpc/nest';
 import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import { resolveReadStoreScope } from '../auth/store-scope.js';
 import { PrismaService } from '../database/prisma.service.js';
 
 /** The CONFIRMED-sale filter for a daily sales report (RPT-01, Section 6.2). */
@@ -65,31 +64,11 @@ interface MovementHistoryRowRaw {
 }
 
 /**
- * Resolve the store scope for a movement-history request (RPT-03, #19), deriving it from the
- * authenticated principal and NEVER trusting the requested store alone. Returns the store id the
- * rows must be filtered to, or `null` for "every store".
- *
- * - A store-scoped role (STAFF) is pinned to its assigned store whatever `requestedStoreId` claims;
- *   if it is unassigned the request is rejected. It can never widen its view past its own store.
- * - A cross-store role (ADMIN, MANAGER, PURCHASING) sees every store (`null`), or the one store it
- *   named in the filter.
- */
-function resolveMovementScope(user: Whoami, requestedStoreId: string | undefined): string | null {
-  if (!isCrossStoreRole(user.role)) {
-    if (!user.assignedStoreId) {
-      throw new ORPCError('FORBIDDEN', { message: STORE_SCOPE_UNASSIGNED_MESSAGE });
-    }
-    return user.assignedStoreId;
-  }
-  return requestedStoreId ?? null;
-}
-
-/**
  * Build the `where` clause for the movement-history report (RPT-03, #19): the authoritative store
  * scope plus the optional product, movement-type and half-open Bangkok date-range filters. The
- * store comes from {@link resolveMovementScope}, not the request body. When both `from` and `to` are
- * given the range is the half-open Bangkok interval {@link reportingDayInterval} computes, keyed on
- * the movement timestamp; a single open bound filters only that side.
+ * store comes from {@link resolveReadStoreScope}, not the request body. When both `from` and `to`
+ * are given the range is the half-open Bangkok interval {@link reportingDayInterval} computes, keyed
+ * on the movement timestamp; a single open bound filters only that side.
  */
 function movementHistoryWhere(input: MovementHistoryReportInput, scopedStoreId: string | null) {
   const where: Record<string, unknown> = {};
@@ -295,7 +274,7 @@ export class ReportsController {
   @Implement(contract.report.movementHistory)
   movementHistory(@CurrentUser() user: Whoami) {
     return implement(contract.report.movementHistory).handler(async ({ input }) => {
-      const scopedStoreId = resolveMovementScope(user, input.storeId);
+      const scopedStoreId = resolveReadStoreScope(user, input.storeId);
       const where = movementHistoryWhere(input, scopedStoreId);
       const { page, pageSize } = input;
 
