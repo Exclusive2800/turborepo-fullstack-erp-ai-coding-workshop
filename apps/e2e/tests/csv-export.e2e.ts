@@ -14,6 +14,8 @@ import { accounts, DEMO_PASSWORD, storageState } from './accounts.js';
 // with a unique SKU and a malicious Thai name, opens its B01 stock, and reads it back through the
 // export.
 test.describe('CSV export (Thai-safe, formula-injection-safe)', () => {
+  test.use({ storageState: storageState('manager') });
+
   const UTF8_BOM = '\uFEFF';
 
   test('a manager exports Thai-safe, formula-injection-safe daily sales and stock-on-hand CSVs; staff cannot export daily sales', async ({
