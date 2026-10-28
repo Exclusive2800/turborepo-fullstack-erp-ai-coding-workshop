@@ -212,6 +212,22 @@ export const MovementHistoryReportSchema = paginated(MovementHistoryRowSchema).e
 });
 export type MovementHistoryReport = z.infer<typeof MovementHistoryReportSchema>;
 
+/**
+ * A CSV export payload (RPT-04, #20). The typed oRPC client carries JSON, not a binary download, so
+ * an export endpoint returns the finished CSV text plus a suggested download filename and the web
+ * triggers the browser download client-side (a `text/csv` Blob). `content` is already Thai-safe
+ * (UTF-8 BOM) and formula-injection-safe (CWE-1236) — see {@link toCsv} — so the web writes it out
+ * verbatim without re-deriving anything. Export applies the SAME filters and permissions as the
+ * on-screen report, so each export route reuses that report's input schema.
+ */
+export const CsvExportSchema = z.object({
+  /** Suggested download filename, e.g. `daily-sales-2026-01-15.csv`. */
+  filename: z.string(),
+  /** The full CSV document, UTF-8 BOM-prefixed and formula-injection-safe, written out verbatim. */
+  content: z.string(),
+});
+export type CsvExport = z.infer<typeof CsvExportSchema>;
+
 export const reportContract = {
   dailySales: oc
     .route({
@@ -253,4 +269,24 @@ export const reportContract = {
     })
     .input(MovementHistoryReportInputSchema)
     .output(MovementHistoryReportSchema),
+  salesCsv: oc
+    .route({
+      method: 'GET',
+      path: '/reports/daily-sales/csv',
+      summary:
+        'Daily sales report as a Thai-safe, formula-injection-safe CSV, same filters and MANAGER permission as the on-screen report (RPT-04)',
+      tags: ['Reports'],
+    })
+    .input(DailySalesReportInputSchema)
+    .output(CsvExportSchema),
+  stockOnHandCsv: oc
+    .route({
+      method: 'GET',
+      path: '/reports/stock-on-hand/csv',
+      summary:
+        'Stock-on-hand report as a Thai-safe, formula-injection-safe CSV, same filters and permissions as the on-screen report (RPT-04)',
+      tags: ['Reports'],
+    })
+    .input(StockOnHandReportInputSchema)
+    .output(CsvExportSchema),
 };

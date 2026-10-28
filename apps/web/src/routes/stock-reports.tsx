@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import {
   REPORT_NO_LOW_STOCK_MESSAGE,
@@ -7,10 +7,12 @@ import {
   type StockItem,
 } from '@erp/contracts';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { orpc } from '@/lib/orpc';
+import { downloadCsv } from '@/lib/download-csv';
+import { client, orpc } from '@/lib/orpc';
 
 type ReportKind = 'on-hand' | 'low-stock';
 
@@ -56,6 +58,18 @@ export function StockReportsPage() {
   // The report resolved and matched nothing (and, for low-stock, a store was chosen).
   const isEmpty = !needsStore && !!report.data && items.length === 0;
   const emptyMessage = kind === 'low-stock' ? REPORT_NO_LOW_STOCK_MESSAGE : REPORT_NO_STOCK_MESSAGE;
+
+  // CSV export (RPT-04, #20): the stock-on-hand report with the current store and search filters,
+  // same permissions as the screen. The API builds the Thai-safe, formula-injection-safe CSV; the
+  // browser saves it verbatim.
+  const exportCsv = useMutation({
+    mutationFn: () =>
+      client.report.stockOnHandCsv({
+        ...(trimmedQuery ? { query: trimmedQuery } : {}),
+        ...(storeId ? { storeId } : {}),
+      }),
+    onSuccess: downloadCsv,
+  });
 
   return (
     <div className="space-y-6">
@@ -131,6 +145,21 @@ export function StockReportsPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
+          <div className="mb-4">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => exportCsv.mutate()}
+              disabled={exportCsv.isPending}
+            >
+              ส่งออก CSV
+            </Button>
+            {exportCsv.isError && (
+              <p role="alert" className="mt-2 text-sm text-destructive">
+                {RETRY_MESSAGE}
+              </p>
+            )}
+          </div>
           {needsStore && (
             <p role="status" className="text-sm text-muted-foreground">
               กรุณาเลือกสาขาเพื่อดูสินค้าใกล้หมด

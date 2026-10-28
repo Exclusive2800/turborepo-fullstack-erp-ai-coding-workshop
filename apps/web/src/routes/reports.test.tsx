@@ -56,7 +56,10 @@ const emptyReport = {
 };
 
 describe('ReportsPage', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
 
   it('shows the daily sales figures once the report resolves', async () => {
     mockApi(reference({ 'GET /reports/daily-sales': populatedReport }));
@@ -107,5 +110,44 @@ describe('ReportsPage', () => {
       expect(url.searchParams.get('to')).toBe('2026-01-15');
       expect(url.searchParams.get('storeId')).toBe('s1');
     });
+  });
+
+  it('exports the daily sales report to CSV with the current filters and triggers a download (RPT-04)', async () => {
+    const fetch = mockApi(
+      reference({
+        'GET /reports/daily-sales': populatedReport,
+        'GET /reports/daily-sales/csv': {
+          filename: 'daily-sales-2026-01-15_2026-01-15.csv',
+          content: '\uFEFFx\r\n1\r\n',
+        },
+      }),
+    );
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:fake');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => undefined);
+
+    renderPage();
+
+    fireEvent.change(await screen.findByLabelText('ตั้งแต่วันที่'), {
+      target: { value: '2026-01-15' },
+    });
+    fireEvent.change(screen.getByLabelText('ถึงวันที่'), { target: { value: '2026-01-15' } });
+    fireEvent.change(screen.getByLabelText('สาขา'), { target: { value: 's1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ส่งออก CSV' }));
+
+    await waitFor(() => {
+      const calls = fetch.mock.calls.filter(
+        ([r]) => new URL(r.url).pathname === '/api/reports/daily-sales/csv',
+      );
+      expect(calls.length).toBeGreaterThan(0);
+      const url = new URL(calls[calls.length - 1]![0].url);
+      expect(url.searchParams.get('from')).toBe('2026-01-15');
+      expect(url.searchParams.get('to')).toBe('2026-01-15');
+      expect(url.searchParams.get('storeId')).toBe('s1');
+    });
+    await waitFor(() => expect(clickSpy).toHaveBeenCalled());
+    expect(createObjectURL).toHaveBeenCalled();
   });
 });
