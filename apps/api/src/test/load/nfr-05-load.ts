@@ -248,7 +248,7 @@ export async function runLoad(
       count: samples.length,
       p95Ms,
       p50Ms: percentile(samples, 50),
-      maxMs: samples.length > 0 ? Math.max(...samples) : 0,
+      maxMs: samples.length > 0 ? samples.reduce((max, v) => (v > max ? v : max), 0) : 0,
       pass: p95Ms <= NFR_05_P95_THRESHOLD_MS,
     };
   });
