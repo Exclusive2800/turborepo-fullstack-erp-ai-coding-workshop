@@ -22,11 +22,13 @@
   },
   "dependencies": {
     "@orpc/contract": "~1.15.7",
+    "luxon": "^3.7.2",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@erp/eslint-config": "workspace:*",
     "@erp/typescript-config": "workspace:*",
+    "@types/luxon": "^3.7.6",
     "@types/node": "^24.0.0",
     "eslint": "^10.13.0",
     "tsup": "^9.0.0",
