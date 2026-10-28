@@ -332,6 +332,38 @@ describe('GoodsReceiptsController', () => {
       expect(post).not.toHaveBeenCalled();
     });
 
+    // AC-04 / GR-01 (#10): the destination store is the PO's store, derived from the authenticated
+    // principal, never from the request body. staff_b02 (assigned B02) receiving against
+    // PO-DEMO-001, whose destination is B01 ('s1'), is rejected with the standard store-scope authz
+    // shape and no write — the receipt number is never allocated, no movement is posted and the
+    // transaction never opens. This is the negative-authz slice the demo walks over the API.
+    it('rejects staff_b02 receiving against a PO destined for B01 and writes nothing (AC-04)', async () => {
+      const findUnique = vi.fn().mockResolvedValue(orderRow({ storeId: 's1' }));
+      const allocateDocumentNumber = vi.fn();
+      const post = vi.fn();
+      const grCreate = vi.fn();
+      const poUpdate = vi.fn();
+      const { controller, $transaction } = await createController({
+        purchaseOrder: { findUnique },
+        posting: { allocateDocumentNumber, post } as Partial<StockPostingService>,
+        tx: {
+          goodsReceipt: { create: grCreate },
+          purchaseOrder: { update: poUpdate },
+        },
+      });
+
+      await expect(call(controller.receive(staffB02), receiveInput)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: STORE_SCOPE_FORBIDDEN_MESSAGE,
+      });
+      // The handler bails on the store-scope check before any write path runs.
+      expect(allocateDocumentNumber).not.toHaveBeenCalled();
+      expect(post).not.toHaveBeenCalled();
+      expect(grCreate).not.toHaveBeenCalled();
+      expect(poUpdate).not.toHaveBeenCalled();
+      expect($transaction).not.toHaveBeenCalled();
+    });
+
     it('returns NOT_FOUND when the order does not exist', async () => {
       const findUnique = vi.fn().mockResolvedValue(null);
       const { controller } = await createController({ purchaseOrder: { findUnique } });
