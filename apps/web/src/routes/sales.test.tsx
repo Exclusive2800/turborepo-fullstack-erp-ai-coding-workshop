@@ -255,4 +255,25 @@ describe('SalesPage', () => {
     await screen.findByText('SAL-000001');
     expect(screen.queryByRole('button', { name: /ยืนยันการขาย/ })).not.toBeInTheDocument();
   });
+
+  // #16 (SAL-04, Seam 3): a confirmed sale is view-only. Its details display in full with Thai
+  // labels, but the screen exposes no control to edit, cancel, return, or re-confirm it — the sale
+  // is a permanent financial record.
+  it('shows a confirmed sale in full but exposes no edit, cancel, return, or confirm control', async () => {
+    mockApi(referenceData({ 'GET /sales': list([confirmedSale]) }));
+
+    renderPage();
+
+    // The confirmed sale displays in full: its document number, confirmed status and total.
+    await screen.findByText('SAL-000001');
+    expect(screen.getByText('CONFIRMED')).toBeInTheDocument();
+    expect(screen.getByText('120.00')).toBeInTheDocument();
+
+    // No mutating control of any kind reaches a confirmed sale. There is deliberately no edit,
+    // cancel, return, or re-confirm button on the row (none exist in the UI at all).
+    expect(screen.queryByRole('button', { name: /ยืนยันการขาย/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /แก้ไข/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /ยกเลิก/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /คืนสินค้า/ })).not.toBeInTheDocument();
+  });
 });
