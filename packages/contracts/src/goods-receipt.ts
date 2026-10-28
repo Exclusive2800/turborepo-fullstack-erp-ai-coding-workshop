@@ -22,14 +22,21 @@ export const GoodsReceiptLineInputSchema = z.object({
 export type GoodsReceiptLineInput = z.infer<typeof GoodsReceiptLineInputSchema>;
 
 /**
- * Recording a goods receipt against an approved purchase order (GR-01/GR-02/GR-03). The destination
- * store is never part of the input — the handler derives it from the authenticated principal and the
- * order (store scoping, spec #1). At least one received line is required; cumulative-received and
- * line-on-order rules are enforced server-side against the order.
+ * Recording a goods receipt against an approved purchase order (GR-01/GR-02/GR-03/GR-04). The
+ * destination store is never part of the input — the handler derives it from the authenticated
+ * principal and the order (store scoping, spec #1). At least one received line is required;
+ * cumulative-received and line-on-order rules are enforced server-side against the order.
+ *
+ * `idempotencyKey` is an optional client-supplied key (GR-04): sending the same key again — a double
+ * click, a retried request after a flaky network — returns the original receipt without raising
+ * stock a second time, while a fresh key creates a genuine second receipt. The key is
+ * unique-constrained in the database, so the guarantee holds even for two requests racing in
+ * parallel. Omitting it keeps the #9 behaviour (every request is a new receipt).
  */
 export const GoodsReceiptCreateInputSchema = z.object({
   purchaseOrderId: z.string().min(1),
   lines: z.array(GoodsReceiptLineInputSchema).min(1, { message: GR_LINES_REQUIRED_MESSAGE }),
+  idempotencyKey: z.string().min(1).optional(),
 });
 export type GoodsReceiptCreateInput = z.infer<typeof GoodsReceiptCreateInputSchema>;
 

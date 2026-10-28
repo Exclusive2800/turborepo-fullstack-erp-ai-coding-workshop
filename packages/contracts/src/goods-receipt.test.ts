@@ -65,6 +65,24 @@ describe('GoodsReceiptCreateInputSchema', () => {
       GoodsReceiptCreateInputSchema.safeParse({ purchaseOrderId: '', lines: input.lines }).success,
     ).toBe(false);
   });
+
+  it('accepts an optional client-supplied idempotency key (GR-04)', () => {
+    const result = GoodsReceiptCreateInputSchema.safeParse({ ...input, idempotencyKey: 'key-123' });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.idempotencyKey).toBe('key-123');
+  });
+
+  it('treats an omitted idempotency key as undefined (back-compatible with #9)', () => {
+    const result = GoodsReceiptCreateInputSchema.safeParse(input);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.idempotencyKey).toBeUndefined();
+  });
+
+  it('rejects an empty idempotency key', () => {
+    expect(GoodsReceiptCreateInputSchema.safeParse({ ...input, idempotencyKey: '' }).success).toBe(
+      false,
+    );
+  });
 });
 
 describe('GoodsReceiptSchema', () => {
