@@ -398,7 +398,6 @@ describe('GoodsReceiptsController', () => {
     it('replays the original receipt for a key that already exists, writing nothing', async () => {
       const orderFindUnique = vi.fn().mockResolvedValue(orderRow());
       const existing = receiptRow({ idempotencyKey: 'key-abc' });
-      const grFindFirst = vi.fn().mockResolvedValue(existing);
       const grFindUnique = vi.fn().mockResolvedValue(existing);
       const allocateDocumentNumber = vi.fn();
       const post = vi.fn();
@@ -406,7 +405,7 @@ describe('GoodsReceiptsController', () => {
       const poUpdate = vi.fn();
       const { controller, $transaction } = await createController({
         purchaseOrder: { findUnique: orderFindUnique },
-        goodsReceipt: { findFirst: grFindFirst, findUnique: grFindUnique },
+        goodsReceipt: { findUnique: grFindUnique },
         posting: { allocateDocumentNumber, post } as Partial<StockPostingService>,
         tx: { goodsReceipt: { create: grCreate }, purchaseOrder: { update: poUpdate } },
       });
@@ -416,12 +415,11 @@ describe('GoodsReceiptsController', () => {
         idempotencyKey: 'key-abc',
       });
 
-      // The original receipt comes back and no write path ran.
+      // The original receipt comes back and no write path ran. The replay looks the key up directly
+      // (the key is globally unique), so the lookup is by key alone.
       expect(result).toMatchObject({ number: 'GR-000001' });
-      expect(grFindFirst).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({ idempotencyKey: 'key-abc' }),
-        }),
+      expect(grFindUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { idempotencyKey: 'key-abc' } }),
       );
       expect($transaction).not.toHaveBeenCalled();
       expect(allocateDocumentNumber).not.toHaveBeenCalled();
@@ -432,14 +430,16 @@ describe('GoodsReceiptsController', () => {
 
     it('creates a genuine receipt for a fresh key and persists the key', async () => {
       const orderFindUnique = vi.fn().mockResolvedValue(orderRow());
-      // No prior receipt for this key.
-      const grFindFirst = vi.fn().mockResolvedValue(null);
-      const grFindUnique = vi.fn().mockResolvedValue(receiptRow({ idempotencyKey: 'key-new' }));
+      // The replay lookup by key finds nothing; the post-commit re-read by id returns the new row.
+      const grFindUnique = vi
+        .fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValue(receiptRow({ idempotencyKey: 'key-new' }));
       const grCreate = vi.fn().mockResolvedValue({ id: 'gr1' });
       const poUpdate = vi.fn().mockResolvedValue({});
       const { controller } = await createController({
         purchaseOrder: { findUnique: orderFindUnique },
-        goodsReceipt: { findFirst: grFindFirst, findUnique: grFindUnique },
+        goodsReceipt: { findUnique: grFindUnique },
         tx: { goodsReceipt: { create: grCreate }, purchaseOrder: { update: poUpdate } },
       });
 

@@ -294,8 +294,9 @@ model GoodsReceipt {
   /// Who recorded the receipt (the STAFF employee). Never null for #9 receipts.
   receivedById    String
   receivedBy      User               @relation(fields: [receivedById], references: [id])
-  /// Client-supplied idempotency key (#11, GR-04). Unique: a retry with the same key returns the
-  /// original receipt and writes no second movement. Null for a receipt recorded without a key.
+  /// Client-supplied idempotency key (#11, GR-04). Globally unique: a retry with the same key — even
+  /// across orders — returns the original receipt and writes no second movement. Null for a receipt
+  /// recorded without a key. Mirrors `Sale.idempotencyKey`, the mechanism sale confirmation reuses.
   idempotencyKey  String?            @unique
   lines           GoodsReceiptLine[]
   createdAt       DateTime           @default(now()) @db.Timestamptz(3)

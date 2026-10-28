@@ -571,4 +571,38 @@ describe.skipIf(!databaseReachable)('GoodsReceiptsController (real Postgres)', (
     expect(view.lines[0]!.received).toBeLessThanOrEqual(20);
     expect(view.lines[0]).toMatchObject({ ordered: 20, received: 20, outstanding: 0 });
   });
+
+  // GR-04 (Seam 2): the key is globally unique, so reusing it against a DIFFERENT order replays the
+  // original receipt rather than creating a second one or erroring. This closes the cross-order
+  // reuse path (the P2002 loser resolves to the winner by key alone) and matches the global unique
+  // constraint the schema declares — the mechanism sale confirmation (#14) reuses.
+  it('replays the original receipt when the same key is reused against a different order', async () => {
+    const first = await seedScenario(20);
+    const second = await seedScenario(20);
+    const key = `idem-${randomUUID()}`;
+
+    const original = await call(controller.receive(first.staffUser), {
+      purchaseOrderId: first.orderId,
+      lines: [{ purchaseOrderLineId: first.purchaseOrderLineId, quantity: 8 }],
+      idempotencyKey: key,
+    });
+
+    // The same key against the second order returns the FIRST order's receipt, writes nothing new,
+    // and leaves the second order untouched.
+    const replay = await call(controller.receive(second.staffUser), {
+      purchaseOrderId: second.orderId,
+      lines: [{ purchaseOrderLineId: second.purchaseOrderLineId, quantity: 5 }],
+      idempotencyKey: key,
+    });
+
+    expect(replay.id).toBe(original.id);
+    expect(replay.purchaseOrderId).toBe(first.orderId);
+
+    const secondReceipts = await harness.prisma.goodsReceipt.findMany({
+      where: { purchaseOrderId: second.orderId },
+    });
+    expect(secondReceipts).toHaveLength(0);
+    expect(await second.balance()).toBe(10);
+    expect(await second.movements()).toBe(0);
+  });
 });

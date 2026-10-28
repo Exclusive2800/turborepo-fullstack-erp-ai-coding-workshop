@@ -182,10 +182,10 @@ export class GoodsReceiptsController {
       assertStoreScope(user, order.storeId);
 
       // Idempotency replay (GR-04): a key that already has a receipt returns that receipt untouched,
-      // before any number is allocated or movement posted. Scoped to this order so a key is only
-      // ever reused for the same order.
+      // before any number is allocated or movement posted. The key is globally unique, so it maps to
+      // exactly one receipt regardless of order.
       if (input.idempotencyKey) {
-        const replay = await this.findReceiptByKey(order.id, input.idempotencyKey);
+        const replay = await this.findReceiptByKey(input.idempotencyKey);
         if (replay) return replay;
       }
 
@@ -271,7 +271,7 @@ export class GoodsReceiptsController {
         // insert lost the race on the unique constraint. Replay the winner's receipt — the whole
         // transaction (number, movements, status advance) rolled back, so no stock was raised twice.
         if (input.idempotencyKey && isUniqueConstraintError(error)) {
-          const replay = await this.findReceiptByKey(order.id, input.idempotencyKey);
+          const replay = await this.findReceiptByKey(input.idempotencyKey);
           if (replay) return replay;
         }
         throw error;
@@ -340,17 +340,16 @@ export class GoodsReceiptsController {
   }
 
   /**
-   * Look up a stored receipt by its PO and idempotency key (GR-04), or null if there is none yet.
-   * Used both for the pre-transaction replay fast path and to resolve a concurrent P2002 loser back
-   * to the winner's receipt. Returns the fully serialized receipt so a replay is byte-for-byte the
-   * original response.
+   * Look up a stored receipt by its idempotency key (GR-04), or null if there is none yet. The key
+   * is globally UNIQUE in the database (matching the mechanism sale confirmation reuses, #14), so a
+   * key identifies exactly one receipt across all orders — the lookup is by key alone, consistent
+   * with the constraint. Used both for the pre-transaction replay fast path and to resolve a
+   * concurrent P2002 loser back to the winner's receipt. Returns the fully serialized receipt so a
+   * replay is byte-for-byte the original response.
    */
-  private async findReceiptByKey(
-    purchaseOrderId: string,
-    idempotencyKey: string,
-  ): Promise<GoodsReceipt | null> {
-    const row = (await this.prisma.goodsReceipt.findFirst({
-      where: { purchaseOrderId, idempotencyKey },
+  private async findReceiptByKey(idempotencyKey: string): Promise<GoodsReceipt | null> {
+    const row = (await this.prisma.goodsReceipt.findUnique({
+      where: { idempotencyKey },
       include: { lines: true },
     })) as GoodsReceiptRow | null;
     return row ? serializeReceipt(row) : null;
