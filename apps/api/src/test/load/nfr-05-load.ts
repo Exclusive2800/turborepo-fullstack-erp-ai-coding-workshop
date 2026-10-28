@@ -1,6 +1,7 @@
 import { call } from '@orpc/server';
 import { randomUUID } from 'node:crypto';
 import type { PrismaClient } from '@erp/database';
+import type { Whoami } from '@erp/contracts';
 import type { PrismaService } from '../../database/prisma.service.js';
 import { ReportsController } from '../../reports/reports.controller.js';
 import { StockController } from '../../stock/stock.controller.js';
@@ -211,6 +212,16 @@ export async function runLoad(
   const stock = new StockController(prisma as unknown as PrismaService, posting);
   const reports = new ReportsController(prisma as unknown as PrismaService);
 
+  // A cross-store principal naming the fixture store: the search handler resolves the scope to that
+  // one store, so the measured query path is identical to the pre-scoping read (INV-01, RPT-03).
+  const loadUser: Whoami = {
+    id: 'nfr05-load-user',
+    email: 'nfr05-load@erp.local',
+    name: 'NFR-05 load user',
+    role: 'MANAGER',
+    assignedStoreId: null,
+  };
+
   const latencies: Record<LoadEndpoint, number[]> = { search: [], 'stock-view': [] };
   const startedAt = new Date();
   const deadline = Date.now() + durationMs;
@@ -226,7 +237,12 @@ export async function runLoad(
     while (Date.now() < deadline) {
       const term = fixture.searchTerms[i % fixture.searchTerms.length];
       await measure('search', () =>
-        call(stock.search(), { page: 1, pageSize: 50, query: term, storeId: fixture.storeId }),
+        call(stock.search(loadUser), {
+          page: 1,
+          pageSize: 50,
+          query: term,
+          storeId: fixture.storeId,
+        }),
       );
       await measure('stock-view', () =>
         call(reports.stockOnHand(), { storeId: fixture.storeId, query: term }),
