@@ -89,8 +89,14 @@ test.describe('sale confirmation concurrency: exactly one wins', () => {
 
     const statuses = [confirmA.status(), confirmB.status()];
     // Exactly one confirm succeeded (200) and exactly one was rejected for insufficient stock (409).
-    expect(statuses.filter((s) => s === 200), 'exactly one confirm succeeds').toHaveLength(1);
-    expect(statuses.filter((s) => s === 409), 'exactly one confirm is rejected').toHaveLength(1);
+    expect(
+      statuses.filter((s) => s === 200),
+      'exactly one confirm succeeds',
+    ).toHaveLength(1);
+    expect(
+      statuses.filter((s) => s === 409),
+      'exactly one confirm is rejected',
+    ).toHaveLength(1);
 
     const winner = confirmA.ok() ? confirmA : confirmB;
     const loser = confirmA.ok() ? confirmB : confirmA;
@@ -98,7 +104,9 @@ test.describe('sale confirmation concurrency: exactly one wins', () => {
     expect(winnerBody.status, 'the winning sale is Confirmed').toBe('CONFIRMED');
     expect(winnerBody.documentNumber, 'the winner has a SAL number').toMatch(/^SAL-/);
     const loserBody = await loser.json();
-    expect(loserBody.message, 'the loser is rejected for insufficient stock').toContain('ไม่เพียงพอ');
+    expect(loserBody.message, 'the loser is rejected for insufficient stock').toContain(
+      'ไม่เพียงพอ',
+    );
 
     // Final stock is 10 − 7 = 3: the oversubscribing second sale never deducted.
     expect(await stockFor(), 'final SKU001 stock is 3').toBe(3);
