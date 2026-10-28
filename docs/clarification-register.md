@@ -7,7 +7,14 @@ authorised change request is approved.
 
 Questions Q-01, Q-03, Q-04 and Q-05 are resolved as "out of the initial release" in the spec
 (GitHub issue #1, "Out of Scope"); they are listed here for completeness. Q-02 affects current
-scope and is implemented.
+scope and is implemented. Change request CR-01 (damaged goods) is under consideration and stays out
+of the baseline; it is tracked in the change-request row below and in
+[`docs/known-limitations.md`](known-limitations.md).
+
+This register is a Section 7.2 handover deliverable. For the full out-of-scope list and the
+test-infrastructure limitations a maintainer must address, see
+[`docs/known-limitations.md`](known-limitations.md); for the release run/install/test instructions,
+see [`docs/handover.md`](handover.md).
 
 | ID       | Business decision                                                                                                                                                                                                                                                                                                            | Approving stakeholder                                                                                              | Date        | Affected requirements                                   | Associated tests |
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ----------- | ------------------------------------------------------- | ---------------- |
@@ -16,6 +23,12 @@ scope and is implemented.
 | Q-03     | Backdated receiving not required; the system confirmation timestamp is used. Deferred.                                                                                                                                                                                                                                       | Manager                                                                                                            | 2026-02     | GR timestamps                                           | — (out of scope) |
 | Q-04     | Reversals of incorrect receipts or sales remain out of scope. Deferred.                                                                                                                                                                                                                                                      | Manager                                                                                                            | 2026-02     | GR, SAL                                                 | — (out of scope) |
 | Q-05     | One base unit per SKU; no purchase/sales unit conversion or barcode scanning. Deferred.                                                                                                                                                                                                                                      | Manager                                                                                                            | 2026-02     | MD-01                                                   | — (out of scope) |
+
+## Change requests
+
+| ID    | Business decision                                                                                                                         | Approving stakeholder | Date    | Affected requirements | Associated tests |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | ------- | --------------------- | ---------------- |
+| CR-01 | Damaged-goods-on-receipt (separate usable vs damaged quantities) is **under consideration**, not accepted into the v1 baseline. Deferred. | Manager               | 2026-02 | GR                    | — (out of scope) |
 
 ## Q-02 — deactivated product received against an approved PO
 
