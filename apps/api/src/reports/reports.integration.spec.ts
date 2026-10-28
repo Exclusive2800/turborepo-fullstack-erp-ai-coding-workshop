@@ -190,3 +190,115 @@ describe.skipIf(!databaseReachable)('ReportsController dailySales (real Postgres
     expect(report.amount).toBe('120.00');
   });
 });
+
+// Seam 2 (#18): the stock-on-hand and low-stock reports over a real Postgres. The single
+// correctness point is the low-stock threshold boundary against real balance rows: a product at
+// balance 0 with threshold 3 is low-stock (0 ≤ 3), exactly at threshold is low-stock, just above is
+// not. A mocked PrismaService cannot exhibit the real `findMany` ordering + the per-store threshold
+// join, so this proves the aggregation end to end. Each scenario seeds its own store/products with
+// a unique suffix so it never collides with the Section 8 fixture or a parallel spec.
+describe.skipIf(!databaseReachable)('ReportsController stock reports (real Postgres)', () => {
+  let harness: IntegrationHarness;
+  let controller: ReportsController;
+
+  const storeIds: string[] = [];
+  const productIds: string[] = [];
+
+  /**
+   * Seed one store with three products at the given on-hand quantities, each with the given reorder
+   * threshold in that store (or no threshold when `threshold` is null). Writes a StockBalance row
+   * per product. Returns the store id and a sku→productId map so a test can assert specific rows.
+   */
+  async function seedStockScenario(
+    quantities: { sku: string; quantity: number; threshold: number | null }[],
+  ): Promise<{ storeId: string; productBySku: Map<string, string> }> {
+    const s = `rpt18-${randomUUID()}`;
+    const store = await harness.prisma.store.create({ data: { code: `S-${s}`, name: s } });
+    storeIds.push(store.id);
+    const productBySku = new Map<string, string>();
+    for (const row of quantities) {
+      const product = await harness.prisma.product.create({
+        data: {
+          sku: `${row.sku}-${s}`,
+          name: `${row.sku} ${s}`,
+          category: 'Test',
+          unit: 'unit',
+          sellingPrice: '10.00',
+        },
+      });
+      productIds.push(product.id);
+      productBySku.set(row.sku, product.id);
+      await harness.prisma.stockBalance.create({
+        data: { productId: product.id, storeId: store.id, quantity: row.quantity },
+      });
+      if (row.threshold !== null) {
+        await harness.prisma.productStoreThreshold.create({
+          data: { productId: product.id, storeId: store.id, threshold: row.threshold },
+        });
+      }
+    }
+    return { storeId: store.id, productBySku };
+  }
+
+  beforeAll(async () => {
+    harness = createIntegrationHarness();
+    controller = new ReportsController(harness.prisma as unknown as PrismaService);
+  });
+
+  afterAll(async () => {
+    if (!harness) return;
+    await harness.prisma.stockMovement.deleteMany({ where: { storeId: { in: storeIds } } });
+    await harness.prisma.stockBalance.deleteMany({ where: { storeId: { in: storeIds } } });
+    await harness.prisma.productStoreThreshold.deleteMany({
+      where: { storeId: { in: storeIds } },
+    });
+    await harness.prisma.product.deleteMany({ where: { id: { in: productIds } } });
+    await harness.prisma.store.deleteMany({ where: { id: { in: storeIds } } });
+    await harness.close();
+  });
+
+  // Stock-on-hand keeps every matching row, zero-stock included, with its threshold and flag.
+  it('stock-on-hand returns every balance for the store, keeping a zero-stock row visible', async () => {
+    const { storeId } = await seedStockScenario([
+      { sku: 'A', quantity: 10, threshold: 3 },
+      { sku: 'B', quantity: 0, threshold: 3 },
+    ]);
+
+    const report = await call(controller.stockOnHand(), { storeId });
+
+    expect(report.total).toBe(2);
+    const zero = report.items.find((i) => i.quantity === 0);
+    expect(zero, 'the zero-stock row must stay visible').toBeDefined();
+    expect(zero?.lowStock).toBe(true);
+    const ten = report.items.find((i) => i.quantity === 10);
+    expect(ten?.lowStock).toBe(false);
+  });
+
+  // The low-stock boundary over real rows: 0 ≤ 3 included, exactly-at included, just-above excluded.
+  it('low-stock includes balance 0 and exactly-at-threshold rows and excludes a just-above row', async () => {
+    const { storeId, productBySku } = await seedStockScenario([
+      { sku: 'ZERO', quantity: 0, threshold: 3 },
+      { sku: 'AT', quantity: 3, threshold: 3 },
+      { sku: 'ABOVE', quantity: 4, threshold: 3 },
+    ]);
+
+    const report = await call(controller.lowStock(), { storeId });
+
+    const ids = new Set(report.items.map((i) => i.productId));
+    expect(ids.has(productBySku.get('ZERO')!)).toBe(true);
+    expect(ids.has(productBySku.get('AT')!)).toBe(true);
+    expect(ids.has(productBySku.get('ABOVE')!)).toBe(false);
+    expect(report.total).toBe(2);
+    expect(report.items.every((i) => i.lowStock)).toBe(true);
+  });
+
+  // A product with no per-store threshold is never low-stock, even at balance 0.
+  it('low-stock excludes a product with no threshold for the store', async () => {
+    const { storeId } = await seedStockScenario([{ sku: 'NOTHRESH', quantity: 0, threshold: null }]);
+
+    const report = await call(controller.lowStock(), { storeId });
+
+    expect(report.items).toEqual([]);
+    expect(report.total).toBe(0);
+  });
+});

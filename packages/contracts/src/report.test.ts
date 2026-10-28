@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   DailySalesReportInputSchema,
+  LowStockReportInputSchema,
   REPORTING_TIME_ZONE,
   reportingDayInterval,
+  StockOnHandReportInputSchema,
 } from './report.js';
 
 // The half-open reporting-interval helper (RPT-01, Section 6.2, user story 51). A reporting day
@@ -77,6 +79,46 @@ describe('DailySalesReportInputSchema', () => {
 
   it('rejects a range whose end is before its start', () => {
     const parsed = DailySalesReportInputSchema.safeParse({ from: '2026-01-31', to: '2026-01-01' });
+    expect(parsed.success).toBe(false);
+  });
+});
+
+describe('StockOnHandReportInputSchema', () => {
+  it('accepts a store and a search query', () => {
+    const parsed = StockOnHandReportInputSchema.safeParse({ storeId: 'store-b01', query: 'SKU' });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('accepts an empty filter (all stores, no query)', () => {
+    const parsed = StockOnHandReportInputSchema.safeParse({});
+    expect(parsed.success).toBe(true);
+  });
+
+  it('trims the search query', () => {
+    const parsed = StockOnHandReportInputSchema.safeParse({ query: '  SKU003  ' });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.query).toBe('SKU003');
+  });
+
+  it('rejects a blank storeId', () => {
+    const parsed = StockOnHandReportInputSchema.safeParse({ storeId: '' });
+    expect(parsed.success).toBe(false);
+  });
+});
+
+describe('LowStockReportInputSchema', () => {
+  it('accepts a store and an optional query', () => {
+    const parsed = LowStockReportInputSchema.safeParse({ storeId: 'store-b01', query: 'SKU003' });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('requires a store — low stock is defined per store', () => {
+    const parsed = LowStockReportInputSchema.safeParse({ query: 'SKU003' });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('rejects a blank storeId', () => {
+    const parsed = LowStockReportInputSchema.safeParse({ storeId: '' });
     expect(parsed.success).toBe(false);
   });
 });
