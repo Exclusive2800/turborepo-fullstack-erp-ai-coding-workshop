@@ -1,0 +1,137 @@
+import { oc } from '@orpc/contract';
+import * as z from 'zod';
+import {
+  SALE_DUPLICATE_PRODUCT_MESSAGE,
+  SALE_LINES_REQUIRED_MESSAGE,
+  SALE_QUANTITY_POSITIVE_MESSAGE,
+} from './errors.js';
+import { paginated, PaginationInputSchema } from './pagination.js';
+
+/**
+ * The sale lifecycle (SAL-01..SAL-04). Mirrors the Prisma `SaleStatus` enum. Both statuses are
+ * modelled now so #14 (sale confirmation) can advance a sale without reshaping the model, but #13
+ * only ever *writes* `DRAFT`: a draft sale is created at `DRAFT` and users never set the status
+ * directly — confirmation (#14) is the only thing that moves it to `CONFIRMED`.
+ */
+export const SaleStatusSchema = z.enum(['DRAFT', 'CONFIRMED']);
+export type SaleStatus = z.infer<typeof SaleStatusSchema>;
+
+/**
+ * A sold quantity on a sale line (SAL-01). Positive whole number: zero, negative and fractional
+ * quantities are rejected at the contract boundary with one actionable Thai message.
+ */
+export const SoldQuantitySchema = z.coerce
+  .number({ message: SALE_QUANTITY_POSITIVE_MESSAGE })
+  .int({ message: SALE_QUANTITY_POSITIVE_MESSAGE })
+  .positive({ message: SALE_QUANTITY_POSITIVE_MESSAGE });
+export type SoldQuantity = z.infer<typeof SoldQuantitySchema>;
+
+/**
+ * One line on a create request: just the product and how many. There is deliberately NO price field
+ * (SAL-02, controlled pricing): the server reads the product's current selling price itself and
+ * snapshots it onto the line. Any `unitPrice` a client sends is stripped by the object schema and
+ * never reaches the handler. The store is likewise never on the line — it is derived from the
+ * authenticated principal, never the request body.
+ */
+export const SaleLineInputSchema = z.object({
+  productId: z.string().min(1),
+  quantity: SoldQuantitySchema,
+});
+export type SaleLineInput = z.infer<typeof SaleLineInputSchema>;
+
+/**
+ * A stored sale line as the API exposes it. `productName`, `sku` and `unitPrice` are a snapshot
+ * taken at line creation (Section 4.3): later edits to the product master never rewrite a stored
+ * line. `unitPrice` is the product's current selling price at creation — there is no client
+ * override. `lineTotal` is `quantity × unitPrice`, a two-decimal money string. `unitPrice` and
+ * `lineTotal` are money strings; `productId` keeps the line linked to the catalogue for #14.
+ */
+export const SaleLineSchema = z.object({
+  id: z.string(),
+  productId: z.string(),
+  sku: z.string(),
+  productName: z.string(),
+  quantity: z.number().int().positive(),
+  unitPrice: z.string(),
+  lineTotal: z.string(),
+});
+export type SaleLine = z.infer<typeof SaleLineSchema>;
+
+/**
+ * A sale as the API exposes it. `total` is the sum of the line totals (Section 4.3), a two-decimal
+ * money string. `status` is `DRAFT` for every sale this ticket creates. `storeId` is the store the
+ * sale was created for, derived from the authenticated principal.
+ */
+export const SaleSchema = z.object({
+  id: z.string(),
+  storeId: z.string(),
+  status: SaleStatusSchema,
+  total: z.string(),
+  lines: z.array(SaleLineSchema),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type Sale = z.infer<typeof SaleSchema>;
+
+/**
+ * Creating a draft sale (SAL-01). Requires at least one line; a duplicate product — the same
+ * `productId` on more than one line — is rejected here with an actionable Thai message; the
+ * per-line positive-whole-number quantity rule lives on the line schema. There is no `storeId` and
+ * no `status` in the input: the handler derives the store from the authenticated principal and
+ * always creates at `DRAFT`. There is no price input either — pricing is controlled server-side.
+ */
+export const SaleCreateInputSchema = z.object({
+  lines: z
+    .array(SaleLineInputSchema)
+    .min(1, { message: SALE_LINES_REQUIRED_MESSAGE })
+    .superRefine((lines, ctx) => {
+      const seen = new Set<string>();
+      lines.forEach((line, index) => {
+        if (seen.has(line.productId)) {
+          ctx.addIssue({
+            code: 'custom',
+            message: SALE_DUPLICATE_PRODUCT_MESSAGE,
+            path: [index, 'productId'],
+          });
+        }
+        seen.add(line.productId);
+      });
+    }),
+});
+export type SaleCreateInput = z.infer<typeof SaleCreateInputSchema>;
+
+export const SaleListSchema = paginated(SaleSchema);
+export type SaleList = z.infer<typeof SaleListSchema>;
+
+export const SaleGetInputSchema = z.object({ id: z.string().min(1) });
+export type SaleGetInput = z.infer<typeof SaleGetInputSchema>;
+
+export const saleContract = {
+  list: oc
+    .route({
+      method: 'GET',
+      path: '/sales',
+      summary: 'List sales, newest first',
+      tags: ['Sales'],
+    })
+    .input(PaginationInputSchema)
+    .output(SaleListSchema),
+  get: oc
+    .route({
+      method: 'GET',
+      path: '/sales/{id}',
+      summary: 'Get one sale with its lines',
+      tags: ['Sales'],
+    })
+    .input(SaleGetInputSchema)
+    .output(SaleSchema),
+  create: oc
+    .route({
+      method: 'POST',
+      path: '/sales',
+      summary: 'Create a draft sale with the current selling price snapshotted onto each line',
+      tags: ['Sales'],
+    })
+    .input(SaleCreateInputSchema)
+    .output(SaleSchema),
+};

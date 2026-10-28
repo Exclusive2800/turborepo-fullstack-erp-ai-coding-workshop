@@ -53,3 +53,26 @@ export const PO_DUPLICATE_SKU_MESSAGE =
 /** A PO was submitted without any product line (PO-01). The user must add at least one line. */
 export const PO_LINES_REQUIRED_MESSAGE =
   'ใบสั่งซื้อต้องมีสินค้าอย่างน้อย 1 รายการ กรุณาเพิ่มรายการสินค้า';
+
+/** A sale-line quantity was not a positive whole number (SAL-01). The user must correct the input. */
+export const SALE_QUANTITY_POSITIVE_MESSAGE =
+  'จำนวนขายต้องเป็นจำนวนเต็มบวก (มากกว่า 0 และไม่มีเศษทศนิยม) กรุณาแก้ไข';
+
+/** A sale was submitted without any product line (SAL-01). The user must add at least one line. */
+export const SALE_LINES_REQUIRED_MESSAGE =
+  'รายการขายต้องมีสินค้าอย่างน้อย 1 รายการ กรุณาเพิ่มรายการสินค้า';
+
+/** The same product appeared on more than one sale line (SAL-01). The user must correct the input. */
+export const SALE_DUPLICATE_PRODUCT_MESSAGE =
+  'มีสินค้าซ้ำกันในรายการขายเดียวกัน กรุณารวมเป็นรายการเดียวหรือลบรายการที่ซ้ำ';
+
+/** A store-scoped user acted for a store that is not theirs. The user cannot retry; it is forbidden. */
+export const STORE_SCOPE_FORBIDDEN_MESSAGE =
+  'คุณไม่มีสิทธิ์ทำรายการสำหรับสาขานี้ กรุณาทำรายการเฉพาะสาขาที่คุณได้รับมอบหมาย';
+
+/** A store-scoped user has no assigned store, so no store can be derived. The user cannot retry. */
+export const STORE_SCOPE_UNASSIGNED_MESSAGE =
+  'บัญชีของคุณยังไม่ได้ถูกกำหนดสาขา กรุณาติดต่อผู้ดูแลระบบเพื่อกำหนดสาขาก่อนทำรายการ';
+
+/** A cross-store user did not name a target store (INV). The user must choose a store. */
+export const STORE_SCOPE_TARGET_REQUIRED_MESSAGE = 'กรุณาเลือกสาขาที่ต้องการทำรายการ';
