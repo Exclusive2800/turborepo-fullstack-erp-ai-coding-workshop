@@ -9,6 +9,7 @@ import { ReportsPage } from '@/routes/reports';
 import { RootLayout } from '@/routes/root-layout';
 import { SalesPage } from '@/routes/sales';
 import { StockPage } from '@/routes/stock';
+import { StockReportsPage } from '@/routes/stock-reports';
 import { StoresPage } from '@/routes/stores';
 import { SuppliersPage } from '@/routes/suppliers';
 
@@ -29,6 +30,7 @@ export const router = createBrowserRouter([
           { path: 'sales', element: <SalesPage /> },
           { path: 'reports', element: <ReportsPage /> },
           { path: 'stock', element: <StockPage /> },
+          { path: 'stock-reports', element: <StockReportsPage /> },
           { path: 'stores', element: <StoresPage /> },
           { path: 'suppliers', element: <SuppliersPage /> },
         ],
