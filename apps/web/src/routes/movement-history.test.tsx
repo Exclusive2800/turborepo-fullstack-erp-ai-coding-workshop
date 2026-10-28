@@ -71,8 +71,15 @@ function row(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function report(items: unknown[], storeId: string | null = null) {
-  return { storeId, items, total: items.length, page: 1, pageSize: 20 };
+function report(items: unknown[], extra: Record<string, unknown> = {}) {
+  return {
+    storeId: null,
+    items,
+    total: items.length,
+    page: 1,
+    pageSize: 20,
+    ...extra,
+  };
 }
 
 describe('MovementHistoryPage', () => {
@@ -95,6 +102,27 @@ describe('MovementHistoryPage', () => {
     expect(screen.getByText('GR-000001')).toBeInTheDocument();
   });
 
+  it('shows the mandatory reason for an adjustment movement (INV-05 traceability)', async () => {
+    mockApi(
+      reference({
+        'GET /reports/movement-history': report([
+          row({
+            id: 'm3',
+            type: 'ADJUSTMENT',
+            sourceDocument: 'ADJUSTMENT',
+            qtyChange: -2,
+            reason: 'นับสต็อกจริง',
+          }),
+        ]),
+      }),
+    );
+
+    renderPage();
+
+    // The adjustment's reason is visible, so the "why" behind the movement is traceable on screen.
+    expect(await screen.findByText('นับสต็อกจริง')).toBeInTheDocument();
+  });
+
   it('shows a clear Thai empty-state when nothing matches the filters', async () => {
     mockApi(reference({ 'GET /reports/movement-history': report([]) }));
 
@@ -107,8 +135,36 @@ describe('MovementHistoryPage', () => {
     ).toBeInTheDocument();
   });
 
+  it('pages through the rows with next/previous when there is more than one page', async () => {
+    const fetch = mockApi(
+      reference({
+        // 45 total rows at pageSize 20 → 3 pages; the first page has a full 20 rows.
+        'GET /reports/movement-history': report(
+          Array.from({ length: 20 }, (_, i) => row({ id: `m${i}`, sourceDocument: `GR-${i}` })),
+          { total: 45 },
+        ),
+      }),
+    );
+
+    renderPage();
+
+    // The pager reports page 1 of 3 and sends page=2 when "next" is clicked.
+    expect(await screen.findByText('หน้า 1 จาก 3')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'หน้าถัดไป' }));
+
+    await waitFor(() => {
+      const calls = fetch.mock.calls.filter(
+        ([r]) => new URL(r.url).pathname === '/api/reports/movement-history',
+      );
+      const url = new URL(calls[calls.length - 1]![0].url);
+      expect(url.searchParams.get('page')).toBe('2');
+    });
+  });
+
   it('sends the store, type and date-range filters to the movement-history endpoint', async () => {
-    const fetch = mockApi(reference({ 'GET /reports/movement-history': report([], 's1') }));
+    const fetch = mockApi(
+      reference({ 'GET /reports/movement-history': report([], { storeId: 's1' }) }),
+    );
 
     renderPage();
 

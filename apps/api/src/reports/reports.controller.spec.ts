@@ -454,6 +454,30 @@ describe('ReportsController', () => {
       expect(oneWhere.storeId).toBe('store-b02');
     });
 
+    it('treats every cross-store role the same way (ADMIN/PURCHASING see all stores, like MANAGER)', async () => {
+      const movementFindMany = vi.fn().mockResolvedValue([]);
+      const { controller } = await createController({ movementFindMany });
+
+      // A PURCHASING officer is cross-store (role = what, store = where), so with no store named the
+      // report spans every store — the same app-wide store-scope rule the other features use.
+      const purchasing = {
+        id: 'u-buy',
+        email: 'buyer01@erp.local',
+        name: 'Buyer One',
+        role: 'PURCHASING' as const,
+        assignedStoreId: null,
+      };
+      const result = await call(
+        controller.movementHistory(purchasing),
+        { page: 1, pageSize: 20 },
+        { context: {} },
+      );
+
+      expect(result.storeId).toBeNull();
+      const where = movementFindMany.mock.calls[0]?.[0]?.where;
+      expect(where).not.toHaveProperty('storeId');
+    });
+
     it('filters by product, type and the half-open Bangkok date range', async () => {
       const movementFindMany = vi.fn().mockResolvedValue([]);
       const { controller } = await createController({ movementFindMany });

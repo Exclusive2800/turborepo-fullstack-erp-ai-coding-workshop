@@ -8,9 +8,11 @@ import {
   type StockMovementType,
 } from '@erp/contracts';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useCurrentUser } from '@/lib/auth';
 import { orpc } from '@/lib/orpc';
 
 /** The movement types a user can filter by, with their Thai labels (INV-02). */
@@ -41,11 +43,20 @@ function formatBangkok(iso: string): string {
  * every store. The screen renders loading, error and a Thai empty-state when nothing matches.
  */
 export function MovementHistoryPage() {
+  const user = useCurrentUser();
+  // A store employee (STAFF) is pinned to their assigned store server-side; the store filter has no
+  // effect for them, so it is hidden to keep the server rule legible in the UI. Cross-store roles
+  // (ADMIN, MANAGER, PURCHASING) choose a store or see every store.
+  const storeScoped = user?.role === 'STAFF';
+
   const [productId, setProductId] = useState('');
   const [storeId, setStoreId] = useState('');
   const [type, setType] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
+  const [page, setPage] = useState(1);
+
+  const pageSize = 20;
 
   const stores = useQuery(orpc.store.list.queryOptions({ input: { page: 1, pageSize: 100 } }));
   const storeItems = stores.data?.items ?? [];
@@ -55,14 +66,22 @@ export function MovementHistoryPage() {
   // An inverted range is left to the user to fix rather than sent to the API; both bounds optional.
   const rangeValid = from === '' || to === '' || from <= to;
 
+  // Any filter change resets to the first page so the user is never stranded past the last page.
+  function onFilterChange<T>(setter: (value: T) => void) {
+    return (value: T) => {
+      setter(value);
+      setPage(1);
+    };
+  }
+
   const history = useQuery(
     orpc.report.movementHistory.queryOptions({
       input: {
-        page: 1,
-        pageSize: 20,
+        page,
+        pageSize,
         // Only send a filter when it has a value, so an empty filter lists everything in scope.
         ...(productId ? { productId } : {}),
-        ...(storeId ? { storeId } : {}),
+        ...(storeId && !storeScoped ? { storeId } : {}),
         ...(type ? { type: type as StockMovementType } : {}),
         ...(from ? { from } : {}),
         ...(to ? { to } : {}),
@@ -72,6 +91,8 @@ export function MovementHistoryPage() {
   );
 
   const items = history.data?.items ?? [];
+  const total = history.data?.total ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const isEmpty = rangeValid && !!history.data && items.length === 0;
 
   return (
@@ -90,7 +111,7 @@ export function MovementHistoryPage() {
                 id="movement-product"
                 className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
                 value={productId}
-                onChange={(e) => setProductId(e.target.value)}
+                onChange={(e) => onFilterChange(setProductId)(e.target.value)}
               >
                 <option value="">ทุกสินค้า</option>
                 {productItems.map((product) => (
@@ -100,29 +121,31 @@ export function MovementHistoryPage() {
                 ))}
               </select>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="movement-store">สาขา</Label>
-              <select
-                id="movement-store"
-                className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
-                value={storeId}
-                onChange={(e) => setStoreId(e.target.value)}
-              >
-                <option value="">ทุกสาขา</option>
-                {storeItems.map((store) => (
-                  <option key={store.id} value={store.id}>
-                    {store.code} — {store.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+            {!storeScoped && (
+              <div className="space-y-2">
+                <Label htmlFor="movement-store">สาขา</Label>
+                <select
+                  id="movement-store"
+                  className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
+                  value={storeId}
+                  onChange={(e) => onFilterChange(setStoreId)(e.target.value)}
+                >
+                  <option value="">ทุกสาขา</option>
+                  {storeItems.map((store) => (
+                    <option key={store.id} value={store.id}>
+                      {store.code} — {store.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor="movement-type">ประเภทความเคลื่อนไหว</Label>
               <select
                 id="movement-type"
                 className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
                 value={type}
-                onChange={(e) => setType(e.target.value)}
+                onChange={(e) => onFilterChange(setType)(e.target.value)}
               >
                 <option value="">ทุกประเภท</option>
                 {MOVEMENT_TYPES.map((movementType) => (
@@ -138,7 +161,7 @@ export function MovementHistoryPage() {
                 id="movement-from"
                 type="date"
                 value={from}
-                onChange={(e) => setFrom(e.target.value)}
+                onChange={(e) => onFilterChange(setFrom)(e.target.value)}
               />
             </div>
             <div className="space-y-2">
@@ -147,10 +170,15 @@ export function MovementHistoryPage() {
                 id="movement-to"
                 type="date"
                 value={to}
-                onChange={(e) => setTo(e.target.value)}
+                onChange={(e) => onFilterChange(setTo)(e.target.value)}
               />
             </div>
           </form>
+          {storeScoped && (
+            <p className="mt-2 text-sm text-muted-foreground">
+              แสดงเฉพาะความเคลื่อนไหวของสาขาที่คุณได้รับมอบหมาย
+            </p>
+          )}
           {!rangeValid && (
             <p role="alert" className="mt-2 text-sm text-destructive">
               {REPORT_DATE_RANGE_INVALID_MESSAGE}
@@ -191,6 +219,7 @@ export function MovementHistoryPage() {
                   <th className="py-2">จำนวน</th>
                   <th className="py-2">คงเหลือ</th>
                   <th className="py-2">เอกสารอ้างอิง</th>
+                  <th className="py-2">เหตุผล</th>
                 </tr>
               </thead>
               <tbody>
@@ -210,10 +239,38 @@ export function MovementHistoryPage() {
                     </td>
                     <td className="py-2">{item.balanceAfter}</td>
                     <td className="py-2">{item.sourceDocument}</td>
+                    <td className="py-2">{item.reason ?? '—'}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          )}
+          {items.length > 0 && (
+            <div className="mt-4 flex items-center justify-between text-sm text-muted-foreground">
+              <span>
+                หน้า {page} จาก {pageCount}
+              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={page <= 1}
+                  onClick={() => setPage((current) => Math.max(1, current - 1))}
+                >
+                  หน้าก่อนหน้า
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={page >= pageCount}
+                  onClick={() => setPage((current) => Math.min(pageCount, current + 1))}
+                >
+                  หน้าถัดไป
+                </Button>
+              </div>
+            </div>
           )}
         </CardContent>
       </Card>
