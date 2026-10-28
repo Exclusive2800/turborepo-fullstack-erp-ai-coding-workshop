@@ -153,6 +153,14 @@ export const REPORT_NO_STOCK_MESSAGE =
 export const REPORT_NO_LOW_STOCK_MESSAGE =
   'ไม่มีสินค้าที่ใกล้หมดในสาขาที่เลือก สต็อกอยู่ในระดับปกติ';
 
+/**
+ * The empty-state message the movement-history report shows when no ledger movement matches the
+ * chosen product, store, type and date range (RPT-03, #19). It tells the user the report ran and
+ * found nothing, not that it failed — try a wider range or a different filter.
+ */
+export const REPORT_NO_MOVEMENTS_MESSAGE =
+  'ไม่พบความเคลื่อนไหวของสต็อกที่ตรงกับตัวกรองที่เลือก กรุณาปรับตัวกรองหรือช่วงวันที่';
+
 /** A store-scoped user acted for a store that is not theirs. The user cannot retry; it is forbidden. */
 export const STORE_SCOPE_FORBIDDEN_MESSAGE =
   'คุณไม่มีสิทธิ์ทำรายการสำหรับสาขานี้ กรุณาทำรายการเฉพาะสาขาที่คุณได้รับมอบหมาย';

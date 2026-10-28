@@ -2,7 +2,8 @@ import { oc } from '@orpc/contract';
 import { DateTime } from 'luxon';
 import * as z from 'zod';
 import { REPORT_DATE_RANGE_INVALID_MESSAGE } from './errors.js';
-import { StockItemSchema } from './stock.js';
+import { paginated, PaginationInputSchema } from './pagination.js';
+import { StockItemSchema, StockMovementTypeSchema } from './stock.js';
 
 /**
  * The reporting time zone (TOR Section 2, 6.2). Every reporting-day boundary is computed in
@@ -142,6 +143,75 @@ export const LowStockReportSchema = z.object({
 });
 export type LowStockReport = z.infer<typeof LowStockReportSchema>;
 
+/**
+ * Movement-history report filters (RPT-03, #19). A read-only view over the append-only stock ledger
+ * (#5): every movement — OPENING, ADJUSTMENT (#6), GOODS_RECEIPT (#9/#11) and SALE (#14) — with its
+ * resulting balance and source document. All filters are optional:
+ * - `productId` / `type` narrow to one product or one movement kind.
+ * - `storeId` narrows to one store, but is a REQUEST for a store, not an authority: the handler
+ *   derives the store scope from the authenticated principal, so a STAFF caller only ever sees
+ *   their assigned store whatever `storeId` claims, and a cross-store role (MANAGER) sees every
+ *   store unless they name one here.
+ * - `from`/`to` are inclusive Asia/Bangkok calendar days; when both are given the handler filters on
+ *   the half-open Bangkok interval {@link reportingDayInterval} computes, keyed on the movement
+ *   timestamp. A range is accepted only when `to` is on or after `from`; either bound may be omitted
+ *   (an open-ended range). Paginated, newest-first.
+ */
+export const MovementHistoryReportInputSchema = PaginationInputSchema.extend({
+  productId: z.string().min(1).optional(),
+  storeId: z.string().min(1).optional(),
+  type: StockMovementTypeSchema.optional(),
+  from: ReportingDateSchema.optional(),
+  to: ReportingDateSchema.optional(),
+}).refine((input) => input.from === undefined || input.to === undefined || input.from <= input.to, {
+  message: REPORT_DATE_RANGE_INVALID_MESSAGE,
+  path: ['to'],
+});
+export type MovementHistoryReportInput = z.infer<typeof MovementHistoryReportInputSchema>;
+
+/**
+ * One movement-history row (RPT-03, #19). The immutable ledger fields (signed `qtyChange`, the
+ * balance before/after, the movement `type`, the mandatory `reason` on an ADJUSTMENT, the actor and
+ * the timestamp) joined to the product and store display fields a history screen needs, plus the
+ * `sourceDocument` text that references the document that caused the movement (a receipt number, a
+ * sale number, `OPENING`, `ADJUSTMENT`). The report never rewrites history, so there is no update
+ * or delete — the row is exactly what the ledger stored. `createdAt` is a UTC ISO string the screen
+ * formats to Asia/Bangkok for display (consistent with #17).
+ */
+export const MovementHistoryRowSchema = z.object({
+  id: z.string(),
+  productId: z.string(),
+  sku: z.string(),
+  productName: z.string(),
+  storeId: z.string(),
+  storeCode: z.string(),
+  qtyChange: z.number().int(),
+  balanceBefore: z.number().int().nonnegative(),
+  balanceAfter: z.number().int().nonnegative(),
+  type: StockMovementTypeSchema,
+  /** The document that caused the movement, e.g. a receipt or sale number, `OPENING`, `ADJUSTMENT`. */
+  sourceDocument: z.string(),
+  /** The mandatory manager reason for an ADJUSTMENT movement (INV-05); null for every other kind. */
+  reason: z.string().nullable(),
+  /** Who caused the movement; null for system-seeded opening balances. */
+  actorId: z.string().nullable(),
+  /** UTC ISO instant; the screen formats it to Asia/Bangkok for display. */
+  createdAt: z.iso.datetime(),
+});
+export type MovementHistoryRow = z.infer<typeof MovementHistoryRowSchema>;
+
+/**
+ * The movement-history report result (RPT-03, #19). A paginated, newest-first page of ledger rows
+ * scoped to the stores the caller may see, echoing the store the rows were computed for
+ * (`storeId` null when a cross-store caller did not narrow to one). An empty page is the empty state
+ * the screen renders with a Thai message.
+ */
+export const MovementHistoryReportSchema = paginated(MovementHistoryRowSchema).extend({
+  /** Echo of the store the rows were scoped to (`null` for a cross-store caller seeing all stores). */
+  storeId: z.string().nullable(),
+});
+export type MovementHistoryReport = z.infer<typeof MovementHistoryReportSchema>;
+
 export const reportContract = {
   dailySales: oc
     .route({
@@ -173,4 +243,14 @@ export const reportContract = {
     })
     .input(LowStockReportInputSchema)
     .output(LowStockReportSchema),
+  movementHistory: oc
+    .route({
+      method: 'GET',
+      path: '/reports/movement-history',
+      summary:
+        'Movement-history report over the stock ledger with source-document reference and principal-derived store scope (RPT-03)',
+      tags: ['Reports'],
+    })
+    .input(MovementHistoryReportInputSchema)
+    .output(MovementHistoryReportSchema),
 };

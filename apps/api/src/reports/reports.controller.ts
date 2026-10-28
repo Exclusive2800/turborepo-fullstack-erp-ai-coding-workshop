@@ -3,13 +3,19 @@ import {
   contract,
   type DailySalesReport,
   type DailySalesReportInput,
+  isCrossStoreRole,
   type LowStockReport,
+  type MovementHistoryReport,
+  type MovementHistoryReportInput,
+  type MovementHistoryRow,
   reportingDayInterval,
   type StockItem,
   type StockOnHandReport,
+  STORE_SCOPE_UNASSIGNED_MESSAGE,
+  type Whoami,
 } from '@erp/contracts';
-import { Implement, implement } from '@orpc/nest';
-import { Roles } from '../auth/auth.decorators.js';
+import { Implement, implement, ORPCError } from '@orpc/nest';
+import { CurrentUser, Roles } from '../auth/auth.decorators.js';
 import { PrismaService } from '../database/prisma.service.js';
 
 /** The CONFIRMED-sale filter for a daily sales report (RPT-01, Section 6.2). */
@@ -37,6 +43,70 @@ interface ReportBalanceRow {
   quantity: number;
   product: { sku: string; name: string; unit: string };
   store: { code: string };
+}
+
+/** A ledger movement joined to the product and store display fields the history row needs (RPT-03). */
+interface MovementHistoryRowRaw {
+  id: string;
+  productId: string;
+  storeId: string;
+  qtyChange: number;
+  balanceBefore: number;
+  balanceAfter: number;
+  type: MovementHistoryRow['type'];
+  sourceDocument: string;
+  reason: string | null;
+  actorId: string | null;
+  createdAt: Date;
+  product: { sku: string; name: string };
+  store: { code: string };
+}
+
+/**
+ * Resolve the store scope for a movement-history request (RPT-03, #19), deriving it from the
+ * authenticated principal and NEVER trusting the requested store alone. Returns the store id the
+ * rows must be filtered to, or `null` for "every store".
+ *
+ * - A store-scoped role (STAFF) is pinned to its assigned store whatever `requestedStoreId` claims;
+ *   if it is unassigned the request is rejected. It can never widen its view past its own store.
+ * - A cross-store role (ADMIN, MANAGER, PURCHASING) sees every store (`null`), or the one store it
+ *   named in the filter.
+ */
+function resolveMovementScope(user: Whoami, requestedStoreId: string | undefined): string | null {
+  if (!isCrossStoreRole(user.role)) {
+    if (!user.assignedStoreId) {
+      throw new ORPCError('FORBIDDEN', { message: STORE_SCOPE_UNASSIGNED_MESSAGE });
+    }
+    return user.assignedStoreId;
+  }
+  return requestedStoreId ?? null;
+}
+
+/**
+ * Build the `where` clause for the movement-history report (RPT-03, #19): the authoritative store
+ * scope plus the optional product, movement-type and half-open Bangkok date-range filters. The
+ * store comes from {@link resolveMovementScope}, not the request body. When both `from` and `to` are
+ * given the range is the half-open Bangkok interval {@link reportingDayInterval} computes, keyed on
+ * the movement timestamp; a single open bound filters only that side.
+ */
+function movementHistoryWhere(input: MovementHistoryReportInput, scopedStoreId: string | null) {
+  const where: Record<string, unknown> = {};
+  if (scopedStoreId) where.storeId = scopedStoreId;
+  if (input.productId) where.productId = input.productId;
+  if (input.type) where.type = input.type;
+  if (input.from !== undefined || input.to !== undefined) {
+    // Anchor each supplied bound to the Asia/Bangkok reporting day: `from` to that day's 00:00 BKK
+    // (inclusive) and `to` to the next Bangkok midnight (exclusive). An open bound is left off.
+    const createdAt: { gte?: Date; lt?: Date } = {};
+    if (input.from !== undefined) {
+      createdAt.gte = reportingDayInterval(input.from, input.from).startUtc;
+    }
+    if (input.to !== undefined) {
+      createdAt.lt = reportingDayInterval(input.to, input.to).endUtc;
+    }
+    where.createdAt = createdAt;
+  }
+  return where;
 }
 
 /**
@@ -193,6 +263,68 @@ export class ReportsController {
         storeId: input.storeId,
         items,
         total: items.length,
+      };
+      return report;
+    });
+  }
+
+  /**
+   * Movement-history report over the append-only stock ledger (RPT-03, #19). A read-only, paginated,
+   * newest-first view of every stock movement — OPENING, ADJUSTMENT (#6), GOODS_RECEIPT (#9/#11) and
+   * SALE (#14) — each row carrying its signed quantity change, the resulting balance, the movement
+   * type, the source document that caused it and the timestamp. Open to any signed-in user (no
+   * `@Roles`), like the stock reports.
+   *
+   * Store scope is derived from the authenticated principal, never the request body: a STAFF caller
+   * only ever receives movements for their assigned store (whatever `storeId` the request names),
+   * and a cross-store role (MANAGER) receives movements across every store, or one store if they
+   * name it in the filter. The product, type and half-open Bangkok date-range filters narrow within
+   * that scope. An empty page is the empty state the screen renders with a Thai message.
+   */
+  @Implement(contract.report.movementHistory)
+  movementHistory(@CurrentUser() user: Whoami) {
+    return implement(contract.report.movementHistory).handler(async ({ input }) => {
+      const scopedStoreId = resolveMovementScope(user, input.storeId);
+      const where = movementHistoryWhere(input, scopedStoreId);
+      const { page, pageSize } = input;
+
+      const [rows, total] = await Promise.all([
+        this.prisma.stockMovement.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          skip: (page - 1) * pageSize,
+          take: pageSize,
+          include: {
+            product: { select: { sku: true, name: true } },
+            store: { select: { code: true } },
+          },
+        }) as Promise<MovementHistoryRowRaw[]>,
+        this.prisma.stockMovement.count({ where }),
+      ]);
+
+      const items: MovementHistoryRow[] = rows.map((row) => ({
+        id: row.id,
+        productId: row.productId,
+        sku: row.product.sku,
+        productName: row.product.name,
+        storeId: row.storeId,
+        storeCode: row.store.code,
+        qtyChange: row.qtyChange,
+        balanceBefore: row.balanceBefore,
+        balanceAfter: row.balanceAfter,
+        type: row.type,
+        sourceDocument: row.sourceDocument,
+        reason: row.reason ?? null,
+        actorId: row.actorId,
+        createdAt: row.createdAt.toISOString(),
+      }));
+
+      const report: MovementHistoryReport = {
+        storeId: scopedStoreId,
+        items,
+        total,
+        page,
+        pageSize,
       };
       return report;
     });

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DailySalesReportInputSchema,
   LowStockReportInputSchema,
+  MovementHistoryReportInputSchema,
   REPORTING_TIME_ZONE,
   reportingDayInterval,
   StockOnHandReportInputSchema,
@@ -119,6 +120,56 @@ describe('LowStockReportInputSchema', () => {
 
   it('rejects a blank storeId', () => {
     const parsed = LowStockReportInputSchema.safeParse({ storeId: '' });
+    expect(parsed.success).toBe(false);
+  });
+});
+
+describe('MovementHistoryReportInputSchema', () => {
+  it('accepts an empty filter (all stores, all types, no range) with pagination defaults', () => {
+    const parsed = MovementHistoryReportInputSchema.safeParse({});
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.page).toBe(1);
+      expect(parsed.data.pageSize).toBe(20);
+    }
+  });
+
+  it('accepts product, store, type and a valid date range', () => {
+    const parsed = MovementHistoryReportInputSchema.safeParse({
+      productId: 'p1',
+      storeId: 'store-b01',
+      type: 'GOODS_RECEIPT',
+      from: '2026-01-01',
+      to: '2026-01-31',
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('accepts an open-ended range (only "from", or only "to")', () => {
+    expect(MovementHistoryReportInputSchema.safeParse({ from: '2026-01-01' }).success).toBe(true);
+    expect(MovementHistoryReportInputSchema.safeParse({ to: '2026-01-31' }).success).toBe(true);
+  });
+
+  it('rejects an unknown movement type', () => {
+    const parsed = MovementHistoryReportInputSchema.safeParse({ type: 'TRANSFER' });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('rejects a range whose end is before its start', () => {
+    const parsed = MovementHistoryReportInputSchema.safeParse({
+      from: '2026-01-31',
+      to: '2026-01-01',
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('rejects a non date-only "from"', () => {
+    const parsed = MovementHistoryReportInputSchema.safeParse({ from: '2026-01-01T00:00:00Z' });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('rejects a blank storeId', () => {
+    const parsed = MovementHistoryReportInputSchema.safeParse({ storeId: '' });
     expect(parsed.success).toBe(false);
   });
 });
