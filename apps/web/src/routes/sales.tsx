@@ -154,6 +154,47 @@ function DraftSaleForm() {
   );
 }
 
+/**
+ * Confirm a draft sale (SAL-03, #14). A store employee clicks once; the server validates the latest
+ * stock for every line, deducts it and transitions the sale to Confirmed in one transaction. The
+ * button carries a stable idempotency key generated once per draft row, so a double click or a
+ * retry after a flaky network confirms the sale exactly once and never deducts stock twice. A
+ * shortfall (or any business rejection) surfaces the actionable Thai message in a `role="alert"`.
+ */
+function ConfirmSaleButton({ saleId }: { saleId: string }) {
+  const queryClient = useQueryClient();
+  // One key for the lifetime of this button: a retry reuses it, so the server replays rather than
+  // double-posting. A fresh render (new draft) gets its own key.
+  const [idempotencyKey] = useState(() => crypto.randomUUID());
+
+  const confirm = useMutation(
+    orpc.sale.confirm.mutationOptions({
+      onSuccess: async () => {
+        await queryClient.invalidateQueries({ queryKey: orpc.sale.list.key() });
+      },
+    }),
+  );
+
+  return (
+    <div className="space-y-1">
+      <Button
+        type="button"
+        size="sm"
+        disabled={confirm.isPending}
+        aria-label={`ยืนยันการขาย ${saleId}`}
+        onClick={() => confirm.mutate({ id: saleId, idempotencyKey })}
+      >
+        {confirm.isPending ? 'กำลังยืนยัน…' : 'ยืนยันการขาย'}
+      </Button>
+      {confirm.error && (
+        <p role="alert" className="text-sm text-destructive">
+          {apiErrorMessage(confirm.error)}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function SalesPage() {
   const user = useCurrentUser();
   const isStaff = user?.role === 'STAFF';
@@ -184,17 +225,23 @@ export function SalesPage() {
                   <th className="py-2">สถานะ</th>
                   <th className="py-2">จำนวนรายการ</th>
                   <th className="py-2">ยอดรวม</th>
+                  {isStaff && <th className="py-2">การดำเนินการ</th>}
                 </tr>
               </thead>
               <tbody>
                 {items.map((sale) => (
                   <tr key={sale.id} className="border-t">
-                    <td className="py-2">{sale.id}</td>
+                    <td className="py-2">{sale.documentNumber ?? sale.id}</td>
                     <td className="py-2">
                       <Badge variant="secondary">{sale.status}</Badge>
                     </td>
                     <td className="py-2">{sale.lines.length}</td>
                     <td className="py-2">{sale.total}</td>
+                    {isStaff && (
+                      <td className="py-2">
+                        {sale.status === 'DRAFT' && <ConfirmSaleButton saleId={sale.id} />}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

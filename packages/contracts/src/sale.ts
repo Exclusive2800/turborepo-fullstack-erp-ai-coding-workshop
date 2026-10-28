@@ -59,14 +59,20 @@ export type SaleLine = z.infer<typeof SaleLineSchema>;
 
 /**
  * A sale as the API exposes it. `total` is the sum of the line totals (Section 4.3), a two-decimal
- * money string. `status` is `DRAFT` for every sale this ticket creates. `storeId` is the store the
- * sale was created for, derived from the authenticated principal.
+ * money string. `status` is `DRAFT` for a draft sale and `CONFIRMED` once confirmed (#14).
+ * `storeId` is the store the sale was created for, derived from the authenticated principal.
+ *
+ * `documentNumber` and `confirmedAt` are null while the sale is a draft and are set together at
+ * confirmation (#14): `documentNumber` is the unique "SAL" number allocated at confirmation and
+ * `confirmedAt` is the confirmation timestamp (#17 keys the reporting day on it).
  */
 export const SaleSchema = z.object({
   id: z.string(),
   storeId: z.string(),
   status: SaleStatusSchema,
   total: z.string(),
+  documentNumber: z.string().nullable(),
+  confirmedAt: z.iso.datetime().nullable(),
   lines: z.array(SaleLineSchema),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
@@ -106,6 +112,25 @@ export type SaleList = z.infer<typeof SaleListSchema>;
 export const SaleGetInputSchema = z.object({ id: z.string().min(1) });
 export type SaleGetInput = z.infer<typeof SaleGetInputSchema>;
 
+/**
+ * Confirming a draft sale (SAL-03, AC-05/AC-06, #14). The input names the draft to confirm and
+ * carries an optional client-supplied `idempotencyKey`. There is no line or price input: the lines
+ * were fixed and priced when the draft was created (#13), and confirmation only validates stock,
+ * posts the deduction and transitions the sale.
+ *
+ * `idempotencyKey` reuses the goods-receipt mechanism (#11): the key is UNIQUE-constrained on
+ * `Sale` in the database, so resending the same key — a double click, a retried request after a
+ * flaky network, two tabs — returns the original confirmed sale and deducts no stock a second time.
+ * The unique constraint, not an in-memory guard, is the source of truth, so the guarantee holds for
+ * two requests racing in parallel. Omitting the key still confirms the sale once; it simply forgoes
+ * safe-retry.
+ */
+export const SaleConfirmInputSchema = z.object({
+  id: z.string().min(1),
+  idempotencyKey: z.string().min(1).optional(),
+});
+export type SaleConfirmInput = z.infer<typeof SaleConfirmInputSchema>;
+
 export const saleContract = {
   list: oc
     .route({
@@ -133,5 +158,15 @@ export const saleContract = {
       tags: ['Sales'],
     })
     .input(SaleCreateInputSchema)
+    .output(SaleSchema),
+  confirm: oc
+    .route({
+      method: 'POST',
+      path: '/sales/{id}/confirm',
+      summary:
+        'Confirm a draft sale (validate stock, deduct, allocate a number, idempotent) in one transaction',
+      tags: ['Sales'],
+    })
+    .input(SaleConfirmInputSchema)
     .output(SaleSchema),
 };

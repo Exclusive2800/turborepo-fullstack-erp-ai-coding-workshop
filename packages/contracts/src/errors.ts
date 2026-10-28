@@ -97,6 +97,24 @@ export const SALE_LINES_REQUIRED_MESSAGE =
 export const SALE_DUPLICATE_PRODUCT_MESSAGE =
   'มีสินค้าซ้ำกันในรายการขายเดียวกัน กรุณารวมเป็นรายการเดียวหรือลบรายการที่ซ้ำ';
 
+/**
+ * A sale confirmation was requested for a sale that is not a Draft (SAL-03). Only a Draft sale can
+ * be confirmed; a sale that is already Confirmed cannot be confirmed again (idempotency aside). The
+ * user cannot retry the same action — the sale is not in a state that permits confirmation.
+ */
+export const SALE_NOT_CONFIRMABLE_MESSAGE =
+  'ไม่สามารถยืนยันรายการขายนี้ได้ เนื่องจากรายการขายไม่ได้อยู่ในสถานะฉบับร่าง';
+
+/**
+ * Sale confirmation found insufficient stock on one or more lines (SAL-03, AC-05). The whole
+ * document is rejected — nothing is posted and no stock is deducted — and the short products are
+ * named by SKU so the user knows which lines to correct. The user must reduce the quantity or
+ * restock before retrying.
+ */
+export function saleInsufficientStockMessage(skus: string[]): string {
+  return `จำนวนสินค้าคงเหลือไม่เพียงพอสำหรับการขาย: ${skus.join(', ')} กรุณาตรวจสอบจำนวนคงเหลือและแก้ไขก่อนยืนยัน`;
+}
+
 /** A store-scoped user acted for a store that is not theirs. The user cannot retry; it is forbidden. */
 export const STORE_SCOPE_FORBIDDEN_MESSAGE =
   'คุณไม่มีสิทธิ์ทำรายการสำหรับสาขานี้ กรุณาทำรายการเฉพาะสาขาที่คุณได้รับมอบหมาย';

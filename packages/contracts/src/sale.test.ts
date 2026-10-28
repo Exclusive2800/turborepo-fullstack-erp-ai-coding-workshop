@@ -5,6 +5,7 @@ import {
   SALE_QUANTITY_POSITIVE_MESSAGE,
 } from './errors.js';
 import {
+  SaleConfirmInputSchema,
   SaleCreateInputSchema,
   SaleLineInputSchema,
   SaleSchema,
@@ -120,6 +121,8 @@ describe('SaleSchema', () => {
     storeId: 's1',
     status: 'DRAFT',
     total: '155.00',
+    documentNumber: null,
+    confirmedAt: null,
     lines: [
       {
         id: 'l1',
@@ -148,11 +151,42 @@ describe('SaleSchema', () => {
     expect(SaleSchema.safeParse(sale).success).toBe(true);
   });
 
+  it('accepts a confirmed sale with a document number and confirmation timestamp', () => {
+    const confirmed = {
+      ...sale,
+      status: 'CONFIRMED',
+      documentNumber: 'SAL-000001',
+      confirmedAt: '2026-01-02T03:04:05.000Z',
+    };
+    expect(SaleSchema.safeParse(confirmed).success).toBe(true);
+  });
+
   it('rejects a line with a non-integer quantity', () => {
     const result = SaleSchema.safeParse({
       ...sale,
       lines: [{ ...sale.lines[0], quantity: 1.5 }],
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe('SaleConfirmInputSchema', () => {
+  it('accepts a sale id with no idempotency key', () => {
+    expect(SaleConfirmInputSchema.safeParse({ id: 'sale1' }).success).toBe(true);
+  });
+
+  it('accepts a sale id with an idempotency key', () => {
+    const result = SaleConfirmInputSchema.safeParse({ id: 'sale1', idempotencyKey: 'k-1' });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a missing sale id', () => {
+    expect(SaleConfirmInputSchema.safeParse({ idempotencyKey: 'k-1' }).success).toBe(false);
+  });
+
+  it('rejects an empty idempotency key', () => {
+    expect(SaleConfirmInputSchema.safeParse({ id: 'sale1', idempotencyKey: '' }).success).toBe(
+      false,
+    );
   });
 });

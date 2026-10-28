@@ -1,6 +1,10 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { EMPTY_LIST_MESSAGE, PRODUCT_INACTIVE_MESSAGE } from '@erp/contracts';
+import {
+  EMPTY_LIST_MESSAGE,
+  PRODUCT_INACTIVE_MESSAGE,
+  saleInsufficientStockMessage,
+} from '@erp/contracts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createQueryClient } from '@/lib/query-client';
 import { conflict, mockApi } from '@/test/mock-api';
@@ -68,6 +72,8 @@ const draftSale = {
   storeId: 's1',
   status: 'DRAFT',
   total: '120.00',
+  documentNumber: null,
+  confirmedAt: null,
   lines: [
     {
       id: 'l1',
@@ -81,6 +87,13 @@ const draftSale = {
   ],
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
+};
+
+const confirmedSale = {
+  ...draftSale,
+  status: 'CONFIRMED',
+  documentNumber: 'SAL-000001',
+  confirmedAt: new Date().toISOString(),
 };
 
 function referenceData(extra: Record<string, unknown> = {}) {
@@ -191,5 +204,55 @@ describe('SalesPage', () => {
     // The list still renders, but there is no create form for a non-store-employee.
     await screen.findByText(EMPTY_LIST_MESSAGE);
     expect(screen.queryByLabelText('สินค้า 1')).not.toBeInTheDocument();
+  });
+
+  it('confirms a draft sale and sends an idempotency key (SAL-03, #14)', async () => {
+    const fetch = mockApi(
+      referenceData({
+        'GET /sales': list([draftSale]),
+        'POST /sales/sale1/confirm': confirmedSale,
+      }),
+    );
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันการขาย sale1' }));
+
+    await waitFor(() => {
+      expect(fetch.mock.calls.find(([r]) => r.method === 'POST')).toBeTruthy();
+    });
+    const post = fetch.mock.calls.find(([r]) => r.method === 'POST')![0];
+    expect(new URL(post.url).pathname).toBe('/api/sales/sale1/confirm');
+    const body = await post.json();
+    // The sale id travels in the path; the body carries the client-supplied idempotency key for
+    // safe retry.
+    expect(typeof body.idempotencyKey).toBe('string');
+    expect(body.idempotencyKey.length).toBeGreaterThan(0);
+  });
+
+  it('shows the actionable Thai shortfall message when confirmation is rejected (AC-05)', async () => {
+    mockApi(
+      referenceData({
+        'GET /sales': list([draftSale]),
+        'POST /sales/sale1/confirm': conflict(saleInsufficientStockMessage(['SKU001'])),
+      }),
+    );
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันการขาย sale1' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('SKU001');
+    expect(alert).toHaveTextContent('ไม่เพียงพอ');
+  });
+
+  it('offers no confirm action on an already-confirmed sale', async () => {
+    mockApi(referenceData({ 'GET /sales': list([confirmedSale]) }));
+
+    renderPage();
+
+    await screen.findByText('SAL-000001');
+    expect(screen.queryByRole('button', { name: /ยืนยันการขาย/ })).not.toBeInTheDocument();
   });
 });
