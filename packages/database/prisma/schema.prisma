@@ -277,8 +277,12 @@ model PurchaseOrderLine {
 // order advances to PARTIALLY_RECEIVED or COMPLETED. A receipt is immutable once written — there is
 // no `updatedAt` and no edit handler, mirroring the append-only ledger.
 //
-// Scope note (#9 is the happy path only): idempotency, over-receive races and concurrency belong to
-// #11 and are NOT modelled here. This carries only what the atomic post needs.
+// Idempotency (#11, GR-04): confirmation accepts a client-supplied `idempotencyKey` that is
+// UNIQUE-constrained in the database. The unique constraint — not an in-memory guard — is the source
+// of truth, which is what makes a retry (or two concurrent requests carrying the same key) safe: a
+// replay returns the original receipt and writes no second movement, and the database rejects the
+// second insert. The column is nullable so #9's existing receipts and any caller that omits a key
+// are unaffected. This mechanism is reused by sale confirmation (#14).
 model GoodsReceipt {
   id              String             @id @default(cuid())
   number          String             @unique
@@ -290,6 +294,10 @@ model GoodsReceipt {
   /// Who recorded the receipt (the STAFF employee). Never null for #9 receipts.
   receivedById    String
   receivedBy      User               @relation(fields: [receivedById], references: [id])
+  /// Client-supplied idempotency key (#11, GR-04). Globally unique: a retry with the same key — even
+  /// across orders — returns the original receipt and writes no second movement. Null for a receipt
+  /// recorded without a key. Mirrors `Sale.idempotencyKey`, the mechanism sale confirmation reuses.
+  idempotencyKey  String?            @unique
   lines           GoodsReceiptLine[]
   createdAt       DateTime           @default(now()) @db.Timestamptz(3)
 

@@ -1,6 +1,7 @@
 import { Reflector } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import {
+  contract,
   GR_LINE_NOT_ON_ORDER_MESSAGE,
   GR_ORDER_NOT_RECEIVABLE_MESSAGE,
   GR_OVER_RECEIVE_MESSAGE,
@@ -87,7 +88,15 @@ interface Stubs {
 }
 
 async function createController(stubs: Stubs = {}) {
-  const txClient = stubs.tx ?? {};
+  // Every receive transaction now locks the PO lines (`$queryRaw ... FOR UPDATE`) and re-sums the
+  // committed received quantity (`goodsReceiptLine.groupBy`) before writing. Provide those on the
+  // transaction client by default — groupBy returns no prior receipts unless a test says otherwise,
+  // so the authoritative in-transaction check matches the request-time snapshot the test set up.
+  const txClient = {
+    $queryRaw: vi.fn().mockResolvedValue([]),
+    goodsReceiptLine: { groupBy: vi.fn().mockResolvedValue([]) },
+    ...stubs.tx,
+  };
   const $transaction = vi.fn(async (cb: (tx: unknown) => unknown) => cb(txClient));
   const moduleRef = await Test.createTestingModule({
     controllers: [GoodsReceiptsController],
@@ -214,6 +223,12 @@ describe('GoodsReceiptsController', () => {
         purchaseOrder: { findUnique },
         goodsReceipt: { findUnique: grFindUnique },
         tx: {
+          // The authoritative in-transaction read sees 12 already received on this line.
+          goodsReceiptLine: {
+            groupBy: vi
+              .fn()
+              .mockResolvedValue([{ purchaseOrderLineId: 'pol1', _sum: { quantity: 12 } }]),
+          },
           goodsReceipt: { create: vi.fn().mockResolvedValue({ id: 'gr1' }) },
           purchaseOrder: { update: poUpdate },
         },
@@ -371,6 +386,90 @@ describe('GoodsReceiptsController', () => {
       await expect(
         call(controller.receive(staffB01), { ...receiveInput, purchaseOrderId: 'missing' }),
       ).rejects.toMatchObject({ code: 'NOT_FOUND', message: NOT_FOUND_MESSAGE });
+    });
+  });
+
+  // Idempotency (#11, GR-04). A client-supplied key that already has a receipt replays that receipt
+  // without touching stock; the lookup happens before the transaction so no number is allocated and
+  // no movement is posted. A fresh key falls through to a genuine new receipt. The DB unique
+  // constraint (proved over real Postgres in the integration spec) is the source of truth for the
+  // concurrent case; this seam proves the request-level replay path.
+  describe('receive idempotency (Seam 1, GR-04)', () => {
+    it('replays the original receipt for a key that already exists, writing nothing', async () => {
+      const orderFindUnique = vi.fn().mockResolvedValue(orderRow());
+      const existing = receiptRow({ idempotencyKey: 'key-abc' });
+      const grFindUnique = vi.fn().mockResolvedValue(existing);
+      const allocateDocumentNumber = vi.fn();
+      const post = vi.fn();
+      const grCreate = vi.fn();
+      const poUpdate = vi.fn();
+      const { controller, $transaction } = await createController({
+        purchaseOrder: { findUnique: orderFindUnique },
+        goodsReceipt: { findUnique: grFindUnique },
+        posting: { allocateDocumentNumber, post } as Partial<StockPostingService>,
+        tx: { goodsReceipt: { create: grCreate }, purchaseOrder: { update: poUpdate } },
+      });
+
+      const result = await call(controller.receive(staffB01), {
+        ...receiveInput,
+        idempotencyKey: 'key-abc',
+      });
+
+      // The original receipt comes back and no write path ran. The replay looks the key up directly
+      // (the key is globally unique), so the lookup is by key alone.
+      expect(result).toMatchObject({ number: 'GR-000001' });
+      expect(grFindUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { idempotencyKey: 'key-abc' } }),
+      );
+      expect($transaction).not.toHaveBeenCalled();
+      expect(allocateDocumentNumber).not.toHaveBeenCalled();
+      expect(post).not.toHaveBeenCalled();
+      expect(grCreate).not.toHaveBeenCalled();
+      expect(poUpdate).not.toHaveBeenCalled();
+    });
+
+    it('creates a genuine receipt for a fresh key and persists the key', async () => {
+      const orderFindUnique = vi.fn().mockResolvedValue(orderRow());
+      // The replay lookup by key finds nothing; the post-commit re-read by id returns the new row.
+      const grFindUnique = vi
+        .fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValue(receiptRow({ idempotencyKey: 'key-new' }));
+      const grCreate = vi.fn().mockResolvedValue({ id: 'gr1' });
+      const poUpdate = vi.fn().mockResolvedValue({});
+      const { controller } = await createController({
+        purchaseOrder: { findUnique: orderFindUnique },
+        goodsReceipt: { findUnique: grFindUnique },
+        tx: { goodsReceipt: { create: grCreate }, purchaseOrder: { update: poUpdate } },
+      });
+
+      const result = await call(controller.receive(staffB01), {
+        ...receiveInput,
+        idempotencyKey: 'key-new',
+      });
+
+      expect(result).toMatchObject({ number: 'GR-000001' });
+      // The key is written onto the new receipt so a later retry can find it.
+      expect(grCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ idempotencyKey: 'key-new' }),
+        }),
+      );
+    });
+  });
+
+  // Immutability (#11, Seam 1, AC-05). A confirmed receipt is append-only: the goods-receipt
+  // contract offers no route to edit or cancel one, so there is no handler to reach. If a future
+  // change adds a mutation route it must fail this guard deliberately, not by accident.
+  describe('receive immutability (Seam 1)', () => {
+    it('exposes no edit or cancel route on the goods-receipt contract', () => {
+      const routes = Object.keys(contract.goodsReceipt);
+      expect(routes.sort()).toEqual(['list', 'receivable', 'receive']);
+      // The controller exposes exactly these handlers — nothing that mutates a stored receipt.
+      const prototype = GoodsReceiptsController.prototype as unknown as Record<string, unknown>;
+      expect(typeof prototype.receive).toBe('function');
+      expect(prototype.update).toBeUndefined();
+      expect(prototype.cancel).toBeUndefined();
     });
   });
 

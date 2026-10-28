@@ -5,6 +5,7 @@ import {
 } from '@erp/contracts';
 import { call } from '@orpc/server';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import type { PrismaService } from '../database/prisma.service.js';
 import {
   createIntegrationHarness,
@@ -297,5 +298,311 @@ describe.skipIf(!databaseReachable)('GoodsReceiptsController (real Postgres)', (
     // The PO is still APPROVED — the status machine never advanced.
     const reread = await harness.prisma.purchaseOrder.findUnique({ where: { id: order.id } });
     expect(reread?.status).toBe('APPROVED');
+  });
+
+  // ─── #11: idempotency, over-receive at the DB level, concurrency ──────────────────────────────
+  //
+  // Unlike the #9 tests above, these assert absolute balances and exact receipt/movement counts, so
+  // each one needs an isolated fixture: its own product, store, STAFF user and Approved PO, with the
+  // store opened at 10 of the product (the Section 8 SKU001 start). Sharing the top-level fixture
+  // would make the assertions depend on test order. `seedScenario` builds that isolation and returns
+  // everything a scenario needs; the ids are tracked for teardown.
+  const scenarioProductIds: string[] = [];
+  const scenarioStoreIds: string[] = [];
+  const scenarioUserIds: string[] = [];
+
+  async function seedScenario(ordered: number): Promise<{
+    staffUser: Whoami;
+    orderId: string;
+    purchaseOrderLineId: string;
+    productId: string;
+    storeId: string;
+    balance: () => Promise<number | undefined>;
+    movements: () => Promise<number>;
+  }> {
+    const s = `gr11-${randomUUID()}`;
+    const store = await harness.prisma.store.create({ data: { code: `S-${s}`, name: s } });
+    const product = await harness.prisma.product.create({
+      data: { sku: `SKU-${s}`, name: s, category: 'Test', unit: 'unit', sellingPrice: '10.00' },
+    });
+    const supplier = await harness.prisma.supplier.create({
+      data: { code: `SUP-${s}`, name: s },
+    });
+    const user = await harness.prisma.user.create({
+      data: {
+        email: `${s}@erp.local`,
+        name: s,
+        role: 'STAFF',
+        assignedStoreId: store.id,
+        passwordHash: 'x',
+      },
+    });
+    scenarioProductIds.push(product.id);
+    scenarioStoreIds.push(store.id);
+    scenarioUserIds.push(user.id);
+
+    // Open the store at 10 via the ledger, as the Section 8 B01 opening does.
+    await harness.prisma.stockBalance.create({
+      data: { productId: product.id, storeId: store.id, quantity: 10 },
+    });
+    await harness.prisma.stockMovement.create({
+      data: {
+        productId: product.id,
+        storeId: store.id,
+        qtyChange: 10,
+        balanceBefore: 0,
+        balanceAfter: 10,
+        type: 'OPENING',
+        sourceDocument: 'OPENING',
+        actorId: null,
+      },
+    });
+
+    const order = await harness.prisma.purchaseOrder.create({
+      data: {
+        number: `PO-${s}`,
+        status: 'APPROVED',
+        supplierId: supplier.id,
+        storeId: store.id,
+        expectedReceiptDate: new Date('2026-02-01T00:00:00.000Z'),
+        total: (ordered * 45).toFixed(2),
+        createdById: user.id,
+        lines: {
+          create: [
+            {
+              productId: product.id,
+              sku: `SKU-${s}`,
+              productName: s,
+              quantity: ordered,
+              unitPrice: '45.00',
+              lineTotal: (ordered * 45).toFixed(2),
+            },
+          ],
+        },
+      },
+      include: { lines: true },
+    });
+
+    return {
+      staffUser: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: 'STAFF',
+        assignedStoreId: store.id,
+      },
+      orderId: order.id,
+      purchaseOrderLineId: order.lines[0]!.id,
+      productId: product.id,
+      storeId: store.id,
+      async balance() {
+        const b = await harness.prisma.stockBalance.findUnique({
+          where: { productId_storeId: { productId: product.id, storeId: store.id } },
+        });
+        return b?.quantity;
+      },
+      async movements() {
+        return harness.prisma.stockMovement.count({
+          where: { productId: product.id, type: 'GOODS_RECEIPT' },
+        });
+      },
+    };
+  }
+
+  afterAll(async () => {
+    // Tear down every #11 scenario fixture (the top-level afterAll above handles the #9 fixture).
+    await harness.prisma.goodsReceipt.deleteMany({ where: { storeId: { in: scenarioStoreIds } } });
+    await harness.prisma.purchaseOrder.deleteMany({ where: { storeId: { in: scenarioStoreIds } } });
+    await harness.prisma.stockMovement.deleteMany({
+      where: { productId: { in: scenarioProductIds } },
+    });
+    await harness.prisma.stockBalance.deleteMany({
+      where: { productId: { in: scenarioProductIds } },
+    });
+    await harness.prisma.user.deleteMany({ where: { id: { in: scenarioUserIds } } });
+    await harness.prisma.product.deleteMany({ where: { id: { in: scenarioProductIds } } });
+    await harness.prisma.store.deleteMany({ where: { id: { in: scenarioStoreIds } } });
+    await harness.prisma.supplier.deleteMany({ where: { code: { startsWith: 'SUP-gr11-' } } });
+  });
+
+  // AC-02 (GR-04, Seam 2): from the Section 8 start (opening 10, ordered 20), receiving 8 then
+  // resending the SAME request (same idempotency key) returns the original receipt — same id and
+  // number — with stock still 18 and cumulative received still 8. The replay writes no second
+  // receipt and no second movement: the unique key is the source of truth.
+  it('replays the same idempotency key: original receipt, stock 18, cumulative 8, no second movement (AC-02)', async () => {
+    const s = await seedScenario(20);
+    const key = `idem-${randomUUID()}`;
+    const request = {
+      purchaseOrderId: s.orderId,
+      lines: [{ purchaseOrderLineId: s.purchaseOrderLineId, quantity: 8 }],
+      idempotencyKey: key,
+    };
+
+    const first = await call(controller.receive(s.staffUser), request);
+    const replay = await call(controller.receive(s.staffUser), request);
+
+    // The replay is the very same receipt, not a new one.
+    expect(replay.id).toBe(first.id);
+    expect(replay.number).toBe(first.number);
+
+    // Exactly one receipt and one GOODS_RECEIPT movement exist for this order/product.
+    const receipts = await harness.prisma.goodsReceipt.findMany({
+      where: { purchaseOrderId: s.orderId },
+    });
+    expect(receipts).toHaveLength(1);
+    expect(await s.movements()).toBe(1);
+
+    // Stock rose exactly once (10 → 18) and cumulative received is 8, not 16.
+    expect(await s.balance()).toBe(18);
+    const view = await call(controller.receivable(s.staffUser), { purchaseOrderId: s.orderId });
+    expect(view.lines[0]).toMatchObject({ ordered: 20, received: 8, outstanding: 12 });
+  });
+
+  // GR-04 (Seam 2): a DIFFERENT key against the same order is a genuine second receipt. From
+  // opening 10, receiving 8 then another 5 under a fresh key yields two receipts, two movements and
+  // stock 23 (10 + 8 + 5).
+  it('creates a genuine second receipt for a fresh key and raises stock again', async () => {
+    const s = await seedScenario(20);
+
+    const first = await call(controller.receive(s.staffUser), {
+      purchaseOrderId: s.orderId,
+      lines: [{ purchaseOrderLineId: s.purchaseOrderLineId, quantity: 8 }],
+      idempotencyKey: `idem-${randomUUID()}`,
+    });
+    const second = await call(controller.receive(s.staffUser), {
+      purchaseOrderId: s.orderId,
+      lines: [{ purchaseOrderLineId: s.purchaseOrderLineId, quantity: 5 }],
+      idempotencyKey: `idem-${randomUUID()}`,
+    });
+
+    expect(second.id).not.toBe(first.id);
+    expect(second.number).not.toBe(first.number);
+    const receipts = await harness.prisma.goodsReceipt.findMany({
+      where: { purchaseOrderId: s.orderId },
+    });
+    expect(receipts).toHaveLength(2);
+    expect(await s.balance()).toBe(23);
+    const view = await call(controller.receivable(s.staffUser), { purchaseOrderId: s.orderId });
+    expect(view.lines[0]).toMatchObject({ ordered: 20, received: 13, outstanding: 7 });
+  });
+
+  // AC-03 (GR-05, Seam 2): from the Section 8 start (opening 10, ordered 20), a request to receive
+  // 21 of SKU001 is rejected — cumulative received (21) would exceed ordered (20). No receipt, no
+  // movement, stock stays 10, and the order stays APPROVED.
+  it('rejects receiving 21 of an order for 20: no receipt, no movement, stock 10, status APPROVED (AC-03)', async () => {
+    const s = await seedScenario(20);
+
+    await expect(
+      call(controller.receive(s.staffUser), {
+        purchaseOrderId: s.orderId,
+        lines: [{ purchaseOrderLineId: s.purchaseOrderLineId, quantity: 21 }],
+      }),
+    ).rejects.toMatchObject({ code: 'CONFLICT', message: GR_OVER_RECEIVE_MESSAGE });
+
+    const receipts = await harness.prisma.goodsReceipt.findMany({
+      where: { purchaseOrderId: s.orderId },
+    });
+    expect(receipts).toHaveLength(0);
+    expect(await s.movements()).toBe(0);
+    expect(await s.balance()).toBe(10);
+    const reread = await harness.prisma.purchaseOrder.findUnique({ where: { id: s.orderId } });
+    expect(reread?.status).toBe('APPROVED');
+  });
+
+  // GR-04 concurrency (Seam 2, PRIMARY): two requests carrying the SAME idempotency key fired in
+  // parallel against the same order resolve to exactly one receipt. The unique constraint lets only
+  // one insert commit; the loser replays the winner. Cumulative received is the single quantity, not
+  // double, and stock rose once.
+  it('two concurrent requests with the same key create exactly one receipt and raise stock once', async () => {
+    const s = await seedScenario(20);
+    const key = `idem-${randomUUID()}`;
+    const request = {
+      purchaseOrderId: s.orderId,
+      lines: [{ purchaseOrderLineId: s.purchaseOrderLineId, quantity: 8 }],
+      idempotencyKey: key,
+    };
+
+    const [a, b] = await Promise.all([
+      call(controller.receive(s.staffUser), request),
+      call(controller.receive(s.staffUser), request),
+    ]);
+
+    // Both callers saw the same single receipt.
+    expect(a.id).toBe(b.id);
+    const receipts = await harness.prisma.goodsReceipt.findMany({
+      where: { purchaseOrderId: s.orderId },
+    });
+    expect(receipts).toHaveLength(1);
+    expect(await s.movements()).toBe(1);
+    expect(await s.balance()).toBe(18);
+  });
+
+  // GR-04/GR-05 concurrency (Seam 2, PRIMARY): two requests with DIFFERENT keys, each for the whole
+  // outstanding quantity (20) of an order for 20, fired in parallel. Cumulative received can never
+  // exceed ordered: at most the outstanding total (20) is received, so exactly one commits and the
+  // other is rejected as an over-receive. The balance rises by at most the ordered quantity.
+  it('two concurrent full-outstanding receipts with different keys never exceed ordered (exactly one wins)', async () => {
+    const s = await seedScenario(20);
+    const makeRequest = () => ({
+      purchaseOrderId: s.orderId,
+      lines: [{ purchaseOrderLineId: s.purchaseOrderLineId, quantity: 20 }],
+      idempotencyKey: `idem-${randomUUID()}`,
+    });
+
+    const results = await Promise.allSettled([
+      call(controller.receive(s.staffUser), makeRequest()),
+      call(controller.receive(s.staffUser), makeRequest()),
+    ]);
+
+    const fulfilled = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected');
+
+    // Exactly one receipt committed; the other lost on the cumulative/over-receive check.
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    const receipts = await harness.prisma.goodsReceipt.findMany({
+      where: { purchaseOrderId: s.orderId },
+    });
+    expect(receipts).toHaveLength(1);
+
+    // Cumulative received never exceeded ordered: stock rose by at most 20 (10 → 30), never 50.
+    expect(await s.balance()).toBe(30);
+    const view = await call(controller.receivable(s.staffUser), { purchaseOrderId: s.orderId });
+    expect(view.lines[0]!.received).toBeLessThanOrEqual(20);
+    expect(view.lines[0]).toMatchObject({ ordered: 20, received: 20, outstanding: 0 });
+  });
+
+  // GR-04 (Seam 2): the key is globally unique, so reusing it against a DIFFERENT order replays the
+  // original receipt rather than creating a second one or erroring. This closes the cross-order
+  // reuse path (the P2002 loser resolves to the winner by key alone) and matches the global unique
+  // constraint the schema declares — the mechanism sale confirmation (#14) reuses.
+  it('replays the original receipt when the same key is reused against a different order', async () => {
+    const first = await seedScenario(20);
+    const second = await seedScenario(20);
+    const key = `idem-${randomUUID()}`;
+
+    const original = await call(controller.receive(first.staffUser), {
+      purchaseOrderId: first.orderId,
+      lines: [{ purchaseOrderLineId: first.purchaseOrderLineId, quantity: 8 }],
+      idempotencyKey: key,
+    });
+
+    // The same key against the second order returns the FIRST order's receipt, writes nothing new,
+    // and leaves the second order untouched.
+    const replay = await call(controller.receive(second.staffUser), {
+      purchaseOrderId: second.orderId,
+      lines: [{ purchaseOrderLineId: second.purchaseOrderLineId, quantity: 5 }],
+      idempotencyKey: key,
+    });
+
+    expect(replay.id).toBe(original.id);
+    expect(replay.purchaseOrderId).toBe(first.orderId);
+
+    const secondReceipts = await harness.prisma.goodsReceipt.findMany({
+      where: { purchaseOrderId: second.orderId },
+    });
+    expect(secondReceipts).toHaveLength(0);
+    expect(await second.balance()).toBe(10);
+    expect(await second.movements()).toBe(0);
   });
 });

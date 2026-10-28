@@ -1,4 +1,5 @@
 import { Controller } from '@nestjs/common';
+import { Prisma } from '@erp/database';
 import {
   contract,
   GR_LINE_NOT_ON_ORDER_MESSAGE,
@@ -16,6 +17,7 @@ import { Implement, implement, ORPCError } from '@orpc/nest';
 import { CurrentUser, Roles } from '../auth/auth.decorators.js';
 import { assertStoreScope } from '../auth/store-scope.js';
 import { PrismaService } from '../database/prisma.service.js';
+import { isUniqueConstraintError } from '../database/prisma-errors.js';
 import { StockPostingService, type StockTxClient } from '../stock/stock-posting.service.js';
 
 /** A PO line row with its receipt lines rolled up, as the receive/receivable handlers load it. */
@@ -149,14 +151,28 @@ export class GoodsReceiptsController {
    * this handler (`@Roles('STAFF')`), and they may only receive for their assigned store — the
    * destination is the order's store, checked against the principal, never taken from the body.
    *
-   * The handler first validates everything that must not produce a partial write (Seam 1): the order
-   * must be Approved or Partially Received; every received line must belong to the order; and the
-   * cumulative received across all receipts must not exceed the ordered quantity on any line
-   * (GR-02). Then, in one transaction (Seam 2, GR-03): it allocates the unique "GR" document number,
-   * writes the receipt and its lines, raises the destination store's `StockBalance` and appends one
-   * GOODS_RECEIPT `StockMovement` per received line through the shared posting service, and advances
-   * the order to PARTIALLY_RECEIVED (quantity still outstanding) or COMPLETED (all lines fully
-   * received). Either the whole receipt commits or nothing does.
+   * Idempotency (GR-04): the request may carry a client-supplied `idempotencyKey`. If a receipt with
+   * that key already exists, the original receipt is returned and nothing is written — a double
+   * click or a retried request after a flaky network never raises stock twice. The key is
+   * UNIQUE-constrained in the database, so even two requests racing in parallel resolve to one
+   * receipt: the loser's insert hits the unique constraint (P2002) and is turned back into a replay
+   * of the winner's receipt. The unique constraint, not this in-memory lookup, is the source of
+   * truth; the pre-check only spares the common (non-racing) retry the work of opening a transaction.
+   *
+   * Over-receive and concurrency (GR-05, AC-03): cumulative received across all receipts can never
+   * exceed the ordered quantity on any line. The pre-transaction check below is a fast, friendly
+   * rejection against the snapshot read at request time, but it is NOT authoritative under
+   * concurrency — two requests can each read a stale "0 received" and both pass it. The binding
+   * check runs inside the transaction (`validateAgainstLockedLines`): it locks the order's lines so
+   * concurrent receipts serialize, re-sums committed received under the lock, and rejects any line
+   * that would exceed ordered. That is what makes "two concurrent receipts never push cumulative
+   * past ordered" hold — exactly one wins.
+   *
+   * On success, in one transaction (Seam 2, GR-03): it allocates the unique "GR" document number,
+   * writes the receipt and its lines (carrying the idempotency key), raises the destination store's
+   * `StockBalance` and appends one GOODS_RECEIPT `StockMovement` per received line through the shared
+   * posting service, and advances the order to PARTIALLY_RECEIVED (quantity still outstanding) or
+   * COMPLETED (all lines fully received). Either the whole receipt commits or nothing does.
    */
   @Roles('STAFF')
   @Implement(contract.goodsReceipt.receive)
@@ -165,15 +181,24 @@ export class GoodsReceiptsController {
       const order = await this.loadOrder(input.purchaseOrderId);
       assertStoreScope(user, order.storeId);
 
+      // Idempotency replay (GR-04): a key that already has a receipt returns that receipt untouched,
+      // before any number is allocated or movement posted. The key is globally unique, so it maps to
+      // exactly one receipt regardless of order.
+      if (input.idempotencyKey) {
+        const replay = await this.findReceiptByKey(input.idempotencyKey);
+        if (replay) return replay;
+      }
+
       if (order.status !== 'APPROVED' && order.status !== 'PARTIALLY_RECEIVED') {
         throw new ORPCError('CONFLICT', { message: GR_ORDER_NOT_RECEIVABLE_MESSAGE });
       }
 
       const lineById = new Map(order.lines.map((line) => [line.id, line]));
 
-      // Validate every input line against the order before writing anything (GR-02). A line not on
-      // the order is a bad request; a line whose cumulative received would exceed ordered is a
-      // conflict. Collect the resolved work so the transaction below only writes.
+      // Fast, non-authoritative pre-check against the request-time snapshot (GR-02): a line not on
+      // the order is a bad request; a line already over its outstanding is a conflict. This spares
+      // the obvious bad request a transaction. The binding over-receive check is inside the
+      // transaction below, under a row lock, so concurrent receipts cannot both pass it.
       const work = input.lines.map((inputLine) => {
         const line = lineById.get(inputLine.purchaseOrderLineId);
         if (!line) {
@@ -186,60 +211,71 @@ export class GoodsReceiptsController {
         return { line, quantity: inputLine.quantity };
       });
 
-      // Whether this receipt fully satisfies the order: every line's cumulative received (including
-      // what is being received now) equals the ordered quantity. Drives the status advance below.
-      const receivedNowByLineId = new Map(work.map((w) => [w.line.id, w.quantity]));
-      const fullyReceived = order.lines.every((line) => {
-        const now = receivedNowByLineId.get(line.id) ?? 0;
-        return receivedSoFar(line) + now >= line.quantity;
-      });
-      const nextStatus: PurchaseOrderStatus = fullyReceived ? 'COMPLETED' : 'PARTIALLY_RECEIVED';
+      let receiptId: string;
+      try {
+        receiptId = await this.prisma.$transaction(async (tx) => {
+          const txClient = tx as unknown as StockTxClient;
 
-      const receiptId = await this.prisma.$transaction(async (tx) => {
-        const txClient = tx as unknown as StockTxClient;
-        const number = await this.posting.allocateDocumentNumber('GR', txClient);
+          // Authoritative over-receive + concurrency guard (GR-05, AC-03): lock the order's lines so
+          // concurrent receipts for this order serialize, then re-validate every received quantity
+          // against the committed cumulative received read under the lock. Returns the next PO
+          // status computed from those authoritative numbers.
+          const nextStatus = await this.validateAgainstLockedLines(tx, order, work);
 
-        const receipt = await (tx as typeof this.prisma).goodsReceipt.create({
-          data: {
-            number,
-            purchaseOrderId: order.id,
-            storeId: order.storeId,
-            receivedById: user.id,
-            lines: {
-              create: work.map(({ line, quantity }) => ({
-                purchaseOrderLineId: line.id,
-                productId: line.productId,
-                sku: line.sku,
-                productName: line.productName,
-                quantity,
-              })),
-            },
-          },
-        });
+          const number = await this.posting.allocateDocumentNumber('GR', txClient);
 
-        // One GOODS_RECEIPT movement per received line, into the order's store, inside this same
-        // transaction so the receipt and the stock change commit or roll back together (GR-03).
-        for (const { line, quantity } of work) {
-          await this.posting.post(
-            {
-              productId: line.productId,
+          const receipt = await (tx as typeof this.prisma).goodsReceipt.create({
+            data: {
+              number,
+              purchaseOrderId: order.id,
               storeId: order.storeId,
-              qtyChange: quantity,
-              type: 'GOODS_RECEIPT',
-              sourceDocument: number,
-              actorId: user.id,
+              receivedById: user.id,
+              idempotencyKey: input.idempotencyKey ?? null,
+              lines: {
+                create: work.map(({ line, quantity }) => ({
+                  purchaseOrderLineId: line.id,
+                  productId: line.productId,
+                  sku: line.sku,
+                  productName: line.productName,
+                  quantity,
+                })),
+              },
             },
-            txClient,
-          );
-        }
+          });
 
-        await (tx as typeof this.prisma).purchaseOrder.update({
-          where: { id: order.id },
-          data: { status: nextStatus },
+          // One GOODS_RECEIPT movement per received line, into the order's store, inside this same
+          // transaction so the receipt and the stock change commit or roll back together (GR-03).
+          for (const { line, quantity } of work) {
+            await this.posting.post(
+              {
+                productId: line.productId,
+                storeId: order.storeId,
+                qtyChange: quantity,
+                type: 'GOODS_RECEIPT',
+                sourceDocument: number,
+                actorId: user.id,
+              },
+              txClient,
+            );
+          }
+
+          await (tx as typeof this.prisma).purchaseOrder.update({
+            where: { id: order.id },
+            data: { status: nextStatus },
+          });
+
+          return receipt.id;
         });
-
-        return receipt.id;
-      });
+      } catch (error) {
+        // Concurrency (GR-04): a second request carrying the same key committed first, so this
+        // insert lost the race on the unique constraint. Replay the winner's receipt — the whole
+        // transaction (number, movements, status advance) rolled back, so no stock was raised twice.
+        if (input.idempotencyKey && isUniqueConstraintError(error)) {
+          const replay = await this.findReceiptByKey(input.idempotencyKey);
+          if (replay) return replay;
+        }
+        throw error;
+      }
 
       const row = (await this.prisma.goodsReceipt.findUnique({
         where: { id: receiptId },
@@ -250,6 +286,73 @@ export class GoodsReceiptsController {
       }
       return serializeReceipt(row);
     });
+  }
+
+  /**
+   * The authoritative over-receive and concurrency guard (GR-05), run inside the receive
+   * transaction. It locks the order's purchase-order lines with `SELECT ... FOR UPDATE`, so two
+   * receipts against the same order serialize here: the second caller blocks until the first
+   * commits, then reads the first's receipt lines. It then re-sums the committed received quantity
+   * per line directly from the database (not the request-time snapshot) and rejects the whole
+   * receipt if any line would exceed its ordered quantity. Returns the PO status to advance to —
+   * COMPLETED when every line is fully received, otherwise PARTIALLY_RECEIVED.
+   */
+  private async validateAgainstLockedLines(
+    tx: unknown,
+    order: PurchaseOrderRow,
+    work: { line: PurchaseOrderLineRow; quantity: number }[],
+  ): Promise<PurchaseOrderStatus> {
+    const client = tx as typeof this.prisma;
+    const lineIds = order.lines.map((line) => line.id);
+
+    // Lock every line of the order. Concurrent receipts for the same order contend on these rows
+    // and take turns, so the cumulative read below is authoritative, never a stale snapshot.
+    await client.$queryRaw`
+      SELECT "id" FROM "PurchaseOrderLine" WHERE "id" IN (${Prisma.join(lineIds)}) FOR UPDATE
+    `;
+
+    // Authoritative cumulative received per line, summed from committed receipt lines under the lock.
+    const grouped = await client.goodsReceiptLine.groupBy({
+      by: ['purchaseOrderLineId'],
+      where: { purchaseOrderLineId: { in: lineIds } },
+      _sum: { quantity: true },
+    });
+    const receivedByLineId = new Map(
+      grouped.map((g) => [g.purchaseOrderLineId, g._sum.quantity ?? 0]),
+    );
+    const receivingNowByLineId = new Map(work.map((w) => [w.line.id, w.quantity]));
+
+    for (const { line, quantity } of work) {
+      const already = receivedByLineId.get(line.id) ?? 0;
+      if (already + quantity > line.quantity) {
+        throw new ORPCError('CONFLICT', { message: GR_OVER_RECEIVE_MESSAGE });
+      }
+    }
+
+    // COMPLETED only when every line's authoritative received (including what this receipt adds)
+    // reaches the ordered quantity; otherwise the order is still outstanding.
+    const fullyReceived = order.lines.every((line) => {
+      const already = receivedByLineId.get(line.id) ?? 0;
+      const now = receivingNowByLineId.get(line.id) ?? 0;
+      return already + now >= line.quantity;
+    });
+    return fullyReceived ? 'COMPLETED' : 'PARTIALLY_RECEIVED';
+  }
+
+  /**
+   * Look up a stored receipt by its idempotency key (GR-04), or null if there is none yet. The key
+   * is globally UNIQUE in the database (matching the mechanism sale confirmation reuses, #14), so a
+   * key identifies exactly one receipt across all orders — the lookup is by key alone, consistent
+   * with the constraint. Used both for the pre-transaction replay fast path and to resolve a
+   * concurrent P2002 loser back to the winner's receipt. Returns the fully serialized receipt so a
+   * replay is byte-for-byte the original response.
+   */
+  private async findReceiptByKey(idempotencyKey: string): Promise<GoodsReceipt | null> {
+    const row = (await this.prisma.goodsReceipt.findUnique({
+      where: { idempotencyKey },
+      include: { lines: true },
+    })) as GoodsReceiptRow | null;
+    return row ? serializeReceipt(row) : null;
   }
 
   /** Load an order with its lines and their rolled-up receipts, or throw NOT_FOUND. */
