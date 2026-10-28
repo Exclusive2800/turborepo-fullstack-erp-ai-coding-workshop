@@ -11,6 +11,70 @@ export function RootLayout() {
             ERP Workshop
             <nav className="flex items-center gap-4 text-sm font-normal">
               <NavLink
+                to="/products"
+                className={({ isActive }) =>
+                  cn('text-muted-foreground hover:text-foreground', isActive && 'text-foreground')
+                }
+              >
+                สินค้า
+              </NavLink>
+              <NavLink
+                to="/stock"
+                className={({ isActive }) =>
+                  cn('text-muted-foreground hover:text-foreground', isActive && 'text-foreground')
+                }
+              >
+                สต็อก
+              </NavLink>
+              <NavLink
+                to="/purchase-orders"
+                className={({ isActive }) =>
+                  cn('text-muted-foreground hover:text-foreground', isActive && 'text-foreground')
+                }
+              >
+                ใบสั่งซื้อ
+              </NavLink>
+              <NavLink
+                to="/receiving"
+                className={({ isActive }) =>
+                  cn('text-muted-foreground hover:text-foreground', isActive && 'text-foreground')
+                }
+              >
+                รับสินค้า
+              </NavLink>
+              <NavLink
+                to="/sales"
+                className={({ isActive }) =>
+                  cn('text-muted-foreground hover:text-foreground', isActive && 'text-foreground')
+                }
+              >
+                รายการขาย
+              </NavLink>
+              <NavLink
+                to="/reports"
+                className={({ isActive }) =>
+                  cn('text-muted-foreground hover:text-foreground', isActive && 'text-foreground')
+                }
+              >
+                รายงาน
+              </NavLink>
+              <NavLink
+                to="/stock-reports"
+                className={({ isActive }) =>
+                  cn('text-muted-foreground hover:text-foreground', isActive && 'text-foreground')
+                }
+              >
+                รายงานสต็อก
+              </NavLink>
+              <NavLink
+                to="/movement-history"
+                className={({ isActive }) =>
+                  cn('text-muted-foreground hover:text-foreground', isActive && 'text-foreground')
+                }
+              >
+                ประวัติสต็อก
+              </NavLink>
+              <NavLink
                 to="/stores"
                 className={({ isActive }) =>
                   cn('text-muted-foreground hover:text-foreground', isActive && 'text-foreground')

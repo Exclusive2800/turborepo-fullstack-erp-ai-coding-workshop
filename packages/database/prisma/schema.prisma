@@ -33,17 +33,34 @@ model User {
   /// The store a STAFF employee is pinned to. Null for cross-store roles (ADMIN, MANAGER, PURCHASING).
   assignedStoreId String?
   assignedStore   Store?  @relation(fields: [assignedStoreId], references: [id])
+  /// Movements this user caused (#5 ledger). Append-only; a user is never deleted while referenced.
+  movements    StockMovement[]
+  /// Purchase orders this user created (#7). A creator referenced by an order is never deleted.
+  createdPurchaseOrders PurchaseOrder[]
+  /// Goods receipts this user recorded (#9). A receiver referenced by a receipt is never deleted.
+  goodsReceipts GoodsReceipt[]
+  /// Sales this user created as a STAFF employee (#13). A creator referenced by a sale stays.
+  createdSales Sale[]
   createdAt    DateTime @default(now()) @db.Timestamptz(3)
   updatedAt    DateTime @updatedAt @db.Timestamptz(3)
 }
 
 model Store {
-  id        String   @id @default(cuid())
-  code      String   @unique
-  name      String
-  users     User[]
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  id         String   @id @default(cuid())
+  code       String   @unique
+  name       String
+  users      User[]
+  thresholds ProductStoreThreshold[]
+  movements  StockMovement[]
+  balances   StockBalance[]
+  /// Purchase orders whose destination is this store (#7).
+  purchaseOrders PurchaseOrder[]
+  /// Goods receipts delivered into this store (#9).
+  goodsReceipts  GoodsReceipt[]
+  /// Sales created for this store (#13). A store referenced by a sale is never deleted.
+  sales          Sale[]
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
 }
 
 model Supplier {
@@ -53,6 +70,334 @@ model Supplier {
   contactName  String?
   contactEmail String?
   contactPhone String?
+  /// Purchase orders raised against this supplier (#7). A supplier referenced by an order stays.
+  purchaseOrders PurchaseOrder[]
   createdAt    DateTime @default(now()) @db.Timestamptz(3)
   updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+}
+
+// A catalogue product (MD-01/MD-02). SKU is unique across the organization and cannot change
+// once a transaction references the product — `skuLocked` is flipped by the transaction features
+// in later tickets; the update handler refuses a SKU change while it is set. `active` controls
+// whether the product may be added to a *new* document; deactivated products stay searchable in
+// historical records (the list endpoint still returns them). Monetary values are two decimals.
+model Product {
+  id           String   @id @default(cuid())
+  sku          String   @unique
+  name         String
+  category     String
+  unit         String
+  sellingPrice Decimal  @db.Decimal(12, 2)
+  active       Boolean  @default(true)
+  /// Set once a transaction references this product, locking the SKU against edits.
+  skuLocked    Boolean  @default(false)
+  /// Per-store reorder thresholds (INV low-stock). One row per store that has a threshold set.
+  thresholds   ProductStoreThreshold[]
+  /// Append-only ledger of every stock change and the maintained per-store balances (#5).
+  movements    StockMovement[]
+  balances     StockBalance[]
+  /// Purchase-order lines that reference this product (#7). A line keeps the link for receiving (#9).
+  purchaseOrderLines PurchaseOrderLine[]
+  /// Goods-receipt lines that received this product (#9). The line keeps the link for history.
+  goodsReceiptLines  GoodsReceiptLine[]
+  /// Sale lines that reference this product (#13). The line keeps the link for confirmation (#14).
+  saleLines    SaleLine[]
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+}
+
+// A product's reorder threshold for one store. Thresholds are per-store (MD-01): the same product
+// can reorder at a different level in each branch. Non-negative whole number.
+model ProductStoreThreshold {
+  id        String   @id @default(cuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  threshold Int
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([productId, storeId])
+}
+
+// Why a stock change happened (INV-02). An OPEN enum by design (spec #1): this release emits
+// OPENING (seeded opening balances), ADJUSTMENT (#6), GOODS_RECEIPT (#7/#9) and SALE (#13/#14);
+// deferred movement kinds (transfers, returns) can be added here without reshaping the ledger.
+enum StockMovementType {
+  OPENING
+  ADJUSTMENT
+  GOODS_RECEIPT
+  SALE
+}
+
+// The append-only stock ledger (INV-02/03). One immutable row per stock change: it records the
+// product, store, signed quantity change, the balance before and after, the movement type, the
+// source document that caused it, the actor, and when. There is no updatedAt and no handler edits
+// or deletes a row — history cannot be rewritten. `balance = opening + sum(qtyChange)` by
+// construction. Every downstream document (adjustment, goods receipt, sale) posts through here.
+model StockMovement {
+  id             String            @id @default(cuid())
+  productId      String
+  product        Product           @relation(fields: [productId], references: [id])
+  storeId        String
+  store          Store             @relation(fields: [storeId], references: [id])
+  /// Signed change applied to the balance: positive for a receipt, negative for a sale.
+  qtyChange      Int
+  /// Authoritative balance immediately before and after this movement was applied.
+  balanceBefore  Int
+  balanceAfter   Int
+  type           StockMovementType
+  /// The document that caused the change, e.g. "OPENING", a receipt or sale number. Snapshot text.
+  sourceDocument String
+  /// The mandatory manager reason for an ADJUSTMENT movement (INV-05); NULL for every other kind.
+  reason         String?
+  /// Who caused the movement (NULL only for system-seeded opening balances).
+  actorId        String?
+  actor          User?             @relation(fields: [actorId], references: [id])
+  createdAt      DateTime          @default(now()) @db.Timestamptz(3)
+
+  @@index([productId, storeId])
+  @@index([storeId, type])
+}
+
+// The current on-hand quantity for one product in one store (INV-01/03). Maintained transactionally
+// from StockMovement rows inside the same transaction that writes the movement; never negative.
+// One row per (product, store).
+model StockBalance {
+  id        String   @id @default(cuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id])
+  quantity  Int      @default(0)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([productId, storeId])
+}
+
+// The unique document-number mechanism (Section 4.3). `IssuedDocumentNumber` holds every number
+// ever handed out; its primary key is the number itself, so a second attempt to issue the same
+// number is rejected by the database. `DocumentCounter` is the per-prefix running count that the
+// allocator increments atomically to generate the next sequential number (e.g. GR-000001).
+// Downstream tickets (#9 goods receipts, #14 sales) allocate through the shared helper.
+model DocumentCounter {
+  prefix    String   @id
+  nextValue Int      @default(1)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+}
+
+model IssuedDocumentNumber {
+  number    String   @id
+  prefix    String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([prefix])
+}
+
+// The purchase-order lifecycle (PO-03, spec #1 "PO/GR state machine"). The FULL set is modelled now
+// so #8 (the authoritative transition table) and #9 (goods receipt) can advance orders without
+// reshaping the model. #7 only ever writes DRAFT; users never set status directly — only a valid
+// transition (owned by #8) moves an order on from DRAFT.
+//   DRAFT → PENDING_APPROVAL → APPROVED → PARTIALLY_RECEIVED → COMPLETED, plus REJECTED, CANCELLED.
+enum PurchaseOrderStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  PARTIALLY_RECEIVED
+  COMPLETED
+  REJECTED
+  CANCELLED
+}
+
+// A purchase order (PO-01/PO-02). A PURCHASING officer drafts an order for a supplier with a
+// destination store, an expected receipt date and at least one line. `number` is the unique
+// document number allocated at creation (Section 4.3). `status` starts at DRAFT; creating an order
+// never moves stock (#7, PO-02). `total` is the sum of line totals, two-decimal money.
+model PurchaseOrder {
+  id                  String              @id @default(cuid())
+  number              String              @unique
+  status              PurchaseOrderStatus @default(DRAFT)
+  /// The mandatory reason captured on the last reject (PO-03) or cancel (PO-04); NULL for an order
+  /// that has never been rejected or cancelled. A rejected order stays viewable *with* this reason.
+  statusReason        String?
+  supplierId          String
+  supplier            Supplier            @relation(fields: [supplierId], references: [id])
+  storeId             String
+  store               Store               @relation(fields: [storeId], references: [id])
+  expectedReceiptDate DateTime            @db.Timestamptz(3)
+  total               Decimal             @db.Decimal(12, 2)
+  /// Who created the order (a PURCHASING officer). Kept for audit; never null for #7 orders.
+  createdById         String?
+  createdBy           User?               @relation(fields: [createdById], references: [id])
+  lines               PurchaseOrderLine[]
+  /// Goods receipts recorded against this order (#9). Receiving advances the order's status.
+  goodsReceipts       GoodsReceipt[]
+  createdAt           DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime            @updatedAt @db.Timestamptz(3)
+
+  @@index([supplierId])
+  @@index([storeId])
+  @@index([status])
+}
+
+// One line of a purchase order (PO-02, Section 4.3). `productName` and `unitPrice` are a SNAPSHOT
+// taken at creation: later edits to the product master never rewrite a stored line. `lineTotal` is
+// `quantity × unitPrice`. `productId`/`sku` keep the line linked to the catalogue for receiving (#9).
+// Ordered quantity is a positive whole number; purchase unit price is non-negative money.
+model PurchaseOrderLine {
+  id              String        @id @default(cuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  productId       String
+  product         Product       @relation(fields: [productId], references: [id])
+  /// Snapshot of the product's SKU at creation (kept alongside the live link for display).
+  sku             String
+  /// Snapshot of the product's name at creation; never rewritten by a later master-data edit.
+  productName     String
+  quantity        Int
+  /// Snapshot of the purchase unit price at creation, two-decimal money.
+  unitPrice       Decimal       @db.Decimal(12, 2)
+  lineTotal       Decimal       @db.Decimal(12, 2)
+  /// Goods-receipt lines booked against this order line (#9). Their cumulative received quantity
+  /// can never exceed `quantity`; outstanding = ordered − sum(received).
+  goodsReceiptLines GoodsReceiptLine[]
+  createdAt       DateTime      @default(now()) @db.Timestamptz(3)
+
+  @@index([purchaseOrderId])
+  @@index([productId])
+}
+
+// A goods receipt against an approved purchase order (GR-01/GR-02/GR-03, #9). A STAFF employee
+// records what physically arrived for one PO into their store. `number` is the unique document
+// number allocated at confirmation via the shared "GR" allocator (Section 4.3). Confirmation is
+// atomic (GR-03): in one transaction the receipt and its lines are written, destination-store
+// `StockBalance` is raised, one GOODS_RECEIPT `StockMovement` is appended per received line, and the
+// order advances to PARTIALLY_RECEIVED or COMPLETED. A receipt is immutable once written — there is
+// no `updatedAt` and no edit handler, mirroring the append-only ledger.
+//
+// Idempotency (#11, GR-04): confirmation accepts a client-supplied `idempotencyKey` that is
+// UNIQUE-constrained in the database. The unique constraint — not an in-memory guard — is the source
+// of truth, which is what makes a retry (or two concurrent requests carrying the same key) safe: a
+// replay returns the original receipt and writes no second movement, and the database rejects the
+// second insert. The column is nullable so #9's existing receipts and any caller that omits a key
+// are unaffected. This mechanism is reused by sale confirmation (#14).
+model GoodsReceipt {
+  id              String             @id @default(cuid())
+  number          String             @unique
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder      @relation(fields: [purchaseOrderId], references: [id])
+  /// The destination store the stock was received into (the PO's store; derived from the principal).
+  storeId         String
+  store           Store              @relation(fields: [storeId], references: [id])
+  /// Who recorded the receipt (the STAFF employee). Never null for #9 receipts.
+  receivedById    String
+  receivedBy      User               @relation(fields: [receivedById], references: [id])
+  /// Client-supplied idempotency key (#11, GR-04). Globally unique: a retry with the same key — even
+  /// across orders — returns the original receipt and writes no second movement. Null for a receipt
+  /// recorded without a key. Mirrors `Sale.idempotencyKey`, the mechanism sale confirmation reuses.
+  idempotencyKey  String?            @unique
+  lines           GoodsReceiptLine[]
+  createdAt       DateTime           @default(now()) @db.Timestamptz(3)
+
+  @@index([purchaseOrderId])
+  @@index([storeId])
+}
+
+// One line of a goods receipt (#9). Links back to the PO line it fulfils so cumulative received can
+// be checked against ordered, and snapshots the product's SKU/name at receipt time so history never
+// changes when the master is later edited. `quantity` is the positive whole number received on this
+// receipt for this line. Each line produces exactly one GOODS_RECEIPT stock movement at confirmation.
+model GoodsReceiptLine {
+  id                  String            @id @default(cuid())
+  goodsReceiptId      String
+  goodsReceipt        GoodsReceipt      @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
+  /// The PO line this receipt fulfils. Cumulative received across all receipts can never exceed the
+  /// ordered quantity on this line (GR-02).
+  purchaseOrderLineId String
+  purchaseOrderLine   PurchaseOrderLine @relation(fields: [purchaseOrderLineId], references: [id])
+  productId           String
+  product             Product           @relation(fields: [productId], references: [id])
+  /// Snapshot of the product's SKU at receipt time (kept alongside the live link for display).
+  sku                 String
+  /// Snapshot of the product's name at receipt time; never rewritten by a later master-data edit.
+  productName         String
+  /// The positive whole quantity received on this receipt for this line.
+  quantity            Int
+  createdAt           DateTime          @default(now()) @db.Timestamptz(3)
+
+  @@index([goodsReceiptId])
+  @@index([purchaseOrderLineId])
+  @@index([productId])
+}
+
+// The sale lifecycle (SAL-01..SAL-04). This ticket (#13) creates sales in DRAFT only; a draft does
+// not touch stock. #14 adds the CONFIRMED transition (atomic post-and-stock, idempotent) — the
+// status is explicit from the start so confirmation is a state change, never a second kind of row.
+enum SaleStatus {
+  DRAFT
+  CONFIRMED
+}
+
+// A retail sale for one store (SAL-01). Created as a DRAFT by a STAFF user for their assigned store
+// (the store is derived from the authenticated principal, never the request body). A draft reserves
+// no stock and writes no movement (SAL-03); only confirmation (#14) moves inventory.
+//
+// Money (Section 4.3): each line snapshots the product's name/SKU and current selling price at
+// creation and the user cannot override the price (SAL-02). `total` is the sum of the line totals,
+// carried on the document so a confirmed sale's amount never drifts when a product's price later
+// changes.
+//
+// The nullable fields below are reserved for #14 (sale confirmation) and stay null for every DRAFT
+// row this ticket writes; adding them now is an additive, nullable migration:
+//   - `documentNumber` — allocated at confirmation via the shared "SAL" allocator; unique.
+//   - `confirmedAt`    — the confirmation timestamp (#17 keys the reporting day on it).
+//   - `idempotencyKey` — client-supplied at confirmation; a retry returns the original sale (SAL-03).
+model Sale {
+  id             String     @id @default(cuid())
+  storeId        String
+  store          Store      @relation(fields: [storeId], references: [id])
+  /// Who created the sale (the STAFF user). A sale is never deleted while it references a user.
+  createdById    String
+  createdBy      User       @relation(fields: [createdById], references: [id])
+  status         SaleStatus @default(DRAFT)
+  /// Document total = sum of line totals, two decimals (Section 4.3).
+  total          Decimal    @db.Decimal(12, 2)
+  /// Reserved for #14: the unique document number allocated at confirmation. Null while DRAFT.
+  documentNumber String?    @unique
+  /// Reserved for #14: when the sale was confirmed. Null while DRAFT.
+  confirmedAt    DateTime?  @db.Timestamptz(3)
+  /// Reserved for #14: client-supplied idempotency key; a retry returns the original sale. Unique.
+  idempotencyKey String?    @unique
+  lines          SaleLine[]
+  createdAt      DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime   @updatedAt @db.Timestamptz(3)
+
+  @@index([storeId, status])
+}
+
+// One line of a sale (SAL-02). Snapshots the product's name, SKU and selling price at the moment the
+// line is created, so a later master-data edit never rewrites sale history (INV / Section 4.3 audit
+// rule). `unitPrice` is always the product's current selling price at creation — there is no client
+// override. `lineTotal` = quantity × unitPrice, two decimals. Quantity is a positive whole number.
+model SaleLine {
+  id          String   @id @default(cuid())
+  saleId      String
+  sale        Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id])
+  /// Snapshot of the product's SKU at line creation (for display/audit without re-reading product).
+  sku         String
+  /// Snapshot of the product's name at line creation.
+  productName String
+  /// Snapshot of the product's selling price at line creation. Controlled — never client-supplied.
+  unitPrice   Decimal  @db.Decimal(12, 2)
+  quantity    Int
+  /// quantity × unitPrice, two decimals.
+  lineTotal   Decimal  @db.Decimal(12, 2)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([saleId])
+  @@index([productId])
 }

@@ -22,3 +22,182 @@ export const RETRY_MESSAGE = 'เกิดข้อผิดพลาด กร�
 
 /** The empty-state message shown when a list has no rows yet. */
 export const EMPTY_LIST_MESSAGE = 'ยังไม่มีข้อมูล';
+
+/** A SKU change was attempted after a transaction locked it. The user must correct the input. */
+export const SKU_LOCKED_MESSAGE =
+  'ไม่สามารถแก้ไขรหัสสินค้า (SKU) ได้ เนื่องจากมีการอ้างอิงในเอกสารแล้ว กรุณาคงรหัสเดิมไว้';
+
+/** A deactivated product was added to a new document. The user must correct the input. */
+export const PRODUCT_INACTIVE_MESSAGE =
+  'สินค้านี้ถูกปิดการใช้งานแล้ว ไม่สามารถเพิ่มลงในเอกสารใหม่ได้ กรุณาเลือกสินค้าอื่น';
+
+/** A manager adjustment arrived without a reason (INV-05). The user must supply a reason. */
+export const ADJUSTMENT_REASON_REQUIRED_MESSAGE =
+  'กรุณาระบุเหตุผลในการปรับปรุงสต็อก เพื่อให้สามารถตรวจสอบย้อนหลังได้';
+
+/** A stock change would drive the balance below zero (INV-03/04). The user must correct the quantity. */
+export const INSUFFICIENT_STOCK_MESSAGE =
+  'จำนวนสินค้าคงเหลือไม่เพียงพอ ไม่สามารถทำรายการที่ทำให้สต็อกติดลบได้ กรุณาตรวจสอบจำนวน';
+
+/** An ordered quantity on a PO line was not a positive whole number (PO-02). Correct the input. */
+export const PO_QUANTITY_POSITIVE_MESSAGE =
+  'จำนวนสั่งซื้อต้องเป็นจำนวนเต็มบวก (มากกว่า 0 และไม่มีเศษทศนิยม) กรุณาแก้ไข';
+
+/** A PO line's purchase unit price was negative (PO-02). Correct the input. */
+export const PO_UNIT_PRICE_NONNEGATIVE_MESSAGE = 'ราคาต่อหน่วยต้องไม่ติดลบ กรุณาแก้ไข';
+
+/** The same SKU appeared on more than one line of a single PO (PO-02). Correct the input. */
+export const PO_DUPLICATE_SKU_MESSAGE =
+  'มีสินค้าซ้ำกันในใบสั่งซื้อเดียวกัน กรุณารวมเป็นรายการเดียวหรือลบรายการที่ซ้ำ';
+
+/** A PO was submitted without any product line (PO-01). The user must add at least one line. */
+export const PO_LINES_REQUIRED_MESSAGE =
+  'ใบสั่งซื้อต้องมีสินค้าอย่างน้อย 1 รายการ กรุณาเพิ่มรายการสินค้า';
+
+/**
+ * A purchase-order status change was requested that the authoritative transition table does not
+ * allow — the wrong source status for the action, or a status that can no longer change (PO-03).
+ * The user cannot retry the same action; the order is not in a state that permits it.
+ */
+export const PO_ILLEGAL_TRANSITION_MESSAGE =
+  'ไม่สามารถเปลี่ยนสถานะใบสั่งซื้อนี้ได้ เนื่องจากสถานะปัจจุบันไม่รองรับการดำเนินการนี้';
+
+/** A manager rejected a purchase order without a reason (PO-03). The user must supply a reason. */
+export const PO_REJECT_REASON_REQUIRED_MESSAGE =
+  'กรุณาระบุเหตุผลในการปฏิเสธใบสั่งซื้อ เพื่อให้สามารถตรวจสอบย้อนหลังได้';
+
+/** A purchase order was cancelled without a reason (PO-04). The user must supply a reason. */
+export const PO_CANCEL_REASON_REQUIRED_MESSAGE =
+  'กรุณาระบุเหตุผลในการยกเลิกใบสั่งซื้อ เพื่อให้สามารถตรวจสอบย้อนหลังได้';
+
+/**
+ * An approved purchase order's lines/quantities/prices/destination store cannot be changed (PO-03).
+ * The user cannot retry; an approved commitment is frozen. Also returned when a status change is
+ * attempted on an already-approved order, since approval is the point the order becomes immutable.
+ */
+export const PO_APPROVED_FROZEN_MESSAGE =
+  'ใบสั่งซื้อที่อนุมัติแล้วไม่สามารถแก้ไขรายการ จำนวน ราคา หรือสาขาปลายทางได้';
+
+/**
+ * A purchase-order transition was attempted by a user who is neither an allowed role nor the order's
+ * creator (PO-03/PO-04). The user cannot retry; they are not permitted to drive this transition.
+ */
+export const PO_TRANSITION_FORBIDDEN_MESSAGE =
+  'คุณไม่มีสิทธิ์ดำเนินการนี้กับใบสั่งซื้อนี้ กรุณาตรวจสอบสิทธิ์หรือติดต่อผู้จัดการ';
+
+/** A sale-line quantity was not a positive whole number (SAL-01). The user must correct the input. */
+export const SALE_QUANTITY_POSITIVE_MESSAGE =
+  'จำนวนขายต้องเป็นจำนวนเต็มบวก (มากกว่า 0 และไม่มีเศษทศนิยม) กรุณาแก้ไข';
+
+/** A sale was submitted without any product line (SAL-01). The user must add at least one line. */
+export const SALE_LINES_REQUIRED_MESSAGE =
+  'รายการขายต้องมีสินค้าอย่างน้อย 1 รายการ กรุณาเพิ่มรายการสินค้า';
+
+/** The same product appeared on more than one sale line (SAL-01). The user must correct the input. */
+export const SALE_DUPLICATE_PRODUCT_MESSAGE =
+  'มีสินค้าซ้ำกันในรายการขายเดียวกัน กรุณารวมเป็นรายการเดียวหรือลบรายการที่ซ้ำ';
+
+/**
+ * A sale confirmation was requested for a sale that is not a Draft (SAL-03). Only a Draft sale can
+ * be confirmed; a sale that is already Confirmed cannot be confirmed again (idempotency aside). The
+ * user cannot retry the same action — the sale is not in a state that permits confirmation.
+ */
+export const SALE_NOT_CONFIRMABLE_MESSAGE =
+  'ไม่สามารถยืนยันรายการขายนี้ได้ เนื่องจากรายการขายไม่ได้อยู่ในสถานะฉบับร่าง';
+
+/**
+ * Sale confirmation found insufficient stock on one or more lines (SAL-03, AC-05). The whole
+ * document is rejected — nothing is posted and no stock is deducted — and the short products are
+ * named by SKU so the user knows which lines to correct. The user must reduce the quantity or
+ * restock before retrying.
+ */
+export function saleInsufficientStockMessage(skus: string[]): string {
+  return `จำนวนสินค้าคงเหลือไม่เพียงพอสำหรับการขาย: ${skus.join(', ')} กรุณาตรวจสอบจำนวนคงเหลือและแก้ไขก่อนยืนยัน`;
+}
+
+/**
+ * A confirmation reused an idempotency key that already belongs to a DIFFERENT sale (#14). The key
+ * must be unique per confirmation; replaying it against another sale would return the wrong
+ * document. The user (client) must retry with a fresh key for this sale.
+ */
+export const SALE_IDEMPOTENCY_KEY_REUSED_MESSAGE =
+  'คีย์การยืนยันซ้ำนี้ถูกใช้กับรายการขายอื่นแล้ว กรุณาใช้คีย์ใหม่สำหรับรายการนี้';
+
+/**
+ * A report's date range was invalid — the end day precedes the start day (RPT-01). The user must
+ * correct the range so `to` is on or after `from`.
+ */
+export const REPORT_DATE_RANGE_INVALID_MESSAGE =
+  'ช่วงวันที่ไม่ถูกต้อง วันที่สิ้นสุดต้องไม่อยู่ก่อนวันที่เริ่มต้น กรุณาแก้ไขช่วงวันที่';
+
+/**
+ * The empty-state message a report screen shows when no confirmed sales match the chosen date range
+ * and store (RPT-01, AC-08 sales-zero half). The figures are all zero; this tells the manager the
+ * report ran and simply found nothing, not that it failed.
+ */
+export const REPORT_NO_SALES_MESSAGE = 'ไม่มียอดขายที่ยืนยันแล้วในช่วงวันที่และสาขาที่เลือก';
+
+/**
+ * The empty-state message the stock-on-hand report shows when no product matches the chosen store
+ * and search (RPT-02, user story 47). It tells the user the report ran and found nothing, not that
+ * it failed — try a different store or search term.
+ */
+export const REPORT_NO_STOCK_MESSAGE =
+  'ไม่พบสินค้าที่ตรงกับสาขาและคำค้นหาที่เลือก กรุณาปรับคำค้นหาหรือเลือกสาขาอื่น';
+
+/**
+ * The empty-state message the low-stock report shows when nothing is at or below its reorder
+ * threshold for the chosen store (RPT-02, AC-08 low-stock half). It tells the user stock is healthy
+ * for that store, not that the report failed.
+ */
+export const REPORT_NO_LOW_STOCK_MESSAGE =
+  'ไม่มีสินค้าที่ใกล้หมดในสาขาที่เลือก สต็อกอยู่ในระดับปกติ';
+
+/**
+ * The empty-state message the movement-history report shows when no ledger movement matches the
+ * chosen product, store, type and date range (RPT-03, #19). It tells the user the report ran and
+ * found nothing, not that it failed — try a wider range or a different filter.
+ */
+export const REPORT_NO_MOVEMENTS_MESSAGE =
+  'ไม่พบความเคลื่อนไหวของสต็อกที่ตรงกับตัวกรองที่เลือก กรุณาปรับตัวกรองหรือช่วงวันที่';
+
+/** A store-scoped user acted for a store that is not theirs. The user cannot retry; it is forbidden. */
+export const STORE_SCOPE_FORBIDDEN_MESSAGE =
+  'คุณไม่มีสิทธิ์ทำรายการสำหรับสาขานี้ กรุณาทำรายการเฉพาะสาขาที่คุณได้รับมอบหมาย';
+
+/** A store-scoped user has no assigned store, so no store can be derived. The user cannot retry. */
+export const STORE_SCOPE_UNASSIGNED_MESSAGE =
+  'บัญชีของคุณยังไม่ได้ถูกกำหนดสาขา กรุณาติดต่อผู้ดูแลระบบเพื่อกำหนดสาขาก่อนทำรายการ';
+
+/** A cross-store user did not name a target store (INV). The user must choose a store. */
+export const STORE_SCOPE_TARGET_REQUIRED_MESSAGE = 'กรุณาเลือกสาขาที่ต้องการทำรายการ';
+
+/**
+ * A goods receipt was recorded against a purchase order that is not in a receivable state (GR-01).
+ * Only an Approved or Partially Received order can be received against; the user cannot retry the
+ * same action until the order reaches a receivable status.
+ */
+export const GR_ORDER_NOT_RECEIVABLE_MESSAGE =
+  'ไม่สามารถรับสินค้าสำหรับใบสั่งซื้อนี้ได้ เนื่องจากใบสั่งซื้อยังไม่ได้รับการอนุมัติหรือไม่อยู่ในสถานะที่รับสินค้าได้';
+
+/**
+ * A goods-receipt line referenced a product/line that is not on the purchase order (GR-02). The
+ * user must correct the input — only lines of the order being received can be added.
+ */
+export const GR_LINE_NOT_ON_ORDER_MESSAGE =
+  'ไม่สามารถรับสินค้าที่ไม่อยู่ในใบสั่งซื้อได้ กรุณารับเฉพาะรายการที่อยู่ในใบสั่งซื้อ';
+
+/**
+ * A goods receipt would push the cumulative received quantity on a line beyond the ordered quantity
+ * (GR-02). The user must correct the quantity so cumulative received never exceeds ordered.
+ */
+export const GR_OVER_RECEIVE_MESSAGE =
+  'จำนวนที่รับสะสมเกินจำนวนที่สั่งซื้อ กรุณาตรวจสอบและแก้ไขจำนวนที่รับให้ไม่เกินยอดคงค้าง';
+
+/** A goods receipt was submitted without any received line (GR-01). The user must add at least one. */
+export const GR_LINES_REQUIRED_MESSAGE =
+  'การรับสินค้าต้องมีรายการอย่างน้อย 1 รายการ กรุณาระบุจำนวนที่รับ';
+
+/** A received quantity on a goods-receipt line was not a positive whole number (GR-02). Correct it. */
+export const GR_QUANTITY_POSITIVE_MESSAGE =
+  'จำนวนที่รับต้องเป็นจำนวนเต็มบวก (มากกว่า 0 และไม่มีเศษทศนิยม) กรุณาแก้ไข';

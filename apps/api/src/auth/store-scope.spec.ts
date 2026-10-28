@@ -1,7 +1,7 @@
 import type { Whoami } from '@erp/contracts';
 import { ORPCError } from '@orpc/nest';
 import { describe, expect, it } from 'vitest';
-import { assertStoreScope, resolveStoreScope } from './store-scope.js';
+import { assertStoreScope, resolveReadStoreScope, resolveStoreScope } from './store-scope.js';
 
 const staffB01: Whoami = {
   id: 'u1',
@@ -62,5 +62,33 @@ describe('resolveStoreScope', () => {
 
   it('requires a target store for a cross-store principal', () => {
     expect(() => resolveStoreScope(manager, undefined)).toThrow(ORPCError);
+  });
+});
+
+describe('resolveReadStoreScope', () => {
+  it('pins a staff reader to their assigned store, ignoring the requested store', () => {
+    // Whatever the body claims, a staff reader only ever sees their own store.
+    expect(resolveReadStoreScope(staffB01, 'store-b02')).toBe('store-b01');
+    expect(resolveReadStoreScope(staffB01, undefined)).toBe('store-b01');
+  });
+
+  it('rejects a staff reader with no assigned store', () => {
+    try {
+      resolveReadStoreScope({ ...staffB01, assignedStoreId: null }, undefined);
+      expect.unreachable('expected a FORBIDDEN rejection');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ORPCError);
+      expect((error as ORPCError<string, unknown>).code).toBe('FORBIDDEN');
+    }
+  });
+
+  it('lets a cross-store reader see every store when none is named (null)', () => {
+    // Role = what, store = where: a cross-store role with no store named reads every store.
+    expect(resolveReadStoreScope(manager, undefined)).toBeNull();
+    expect(resolveReadStoreScope(admin, undefined)).toBeNull();
+  });
+
+  it('scopes a cross-store reader to the one store they name', () => {
+    expect(resolveReadStoreScope(manager, 'store-b02')).toBe('store-b02');
   });
 });
