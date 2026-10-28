@@ -173,13 +173,13 @@ async function main() {
   }
 
   // Demo purchase order PO-DEMO-001 (TOR Section 8): 20× SKU001 @ 45.00, destination B01, no
-  // receipts. The TOR fixture describes it as *Approved*, but the approval transition is owned by
-  // the PO state machine (#8); #7 only ever writes DRAFT and users never set status directly. So we
-  // seed it at DRAFT now and leave a TODO for #8 to flip it to APPROVED through a real transition
-  // once the state machine lands — we do NOT fabricate the APPROVED state here. Idempotent: the row
-  // is keyed by its unique document number and its single line is reset to the fixture each run.
-  // TODO(#8): once the PO state machine exists, advance PO-DEMO-001 DRAFT → PENDING_APPROVAL →
-  // APPROVED via valid transitions so the seed matches the TOR's "Approved PO-DEMO-001" fixture.
+  // receipts, ending at APPROVED. The TOR fixture describes it as *Approved*. Approval is owned by
+  // the PO state machine (#8): users never set status directly — an order only reaches APPROVED by
+  // walking valid transitions DRAFT → PENDING_APPROVAL → APPROVED. The seed reproduces exactly that
+  // path (the same `submit` then `approve` transitions the API performs) rather than writing
+  // APPROVED directly, so the seeded state is one a real caller could have produced. Idempotent: the
+  // row is keyed by its unique document number and its single line is reset to the fixture each run,
+  // then re-walked to APPROVED.
   const PO_DEMO_NUMBER = 'PO-DEMO-001';
   const sku001Id = productIdBySku.get('SKU001');
   const buyer = await prisma.user.findUnique({ where: { email: 'buyer01@erp.local' } });
@@ -188,57 +188,62 @@ async function main() {
     const demoQuantity = 20;
     const demoUnitPrice = '45.00';
     const demoLineTotal = (demoQuantity * Number(demoUnitPrice)).toFixed(2);
+    const supplierId = (await prisma.supplier.findUniqueOrThrow({ where: { code: 'SUP01' } })).id;
+    // Walk the state machine's own transitions (#8): create at DRAFT, submit → PENDING_APPROVAL,
+    // approve → APPROVED, the same two transitions the API performs. The authoritative transition
+    // table lives in `@erp/contracts` (`PO_TRANSITIONS`); the seed deliberately reproduces that
+    // DRAFT → PENDING_APPROVAL → APPROVED path step by step rather than writing APPROVED directly,
+    // so the seeded state is one a real caller could have produced through valid transitions.
+    const demoLine = {
+      productId: sku001Id,
+      sku: 'SKU001',
+      productName: sku001?.name ?? 'SKU001',
+      quantity: demoQuantity,
+      unitPrice: demoUnitPrice,
+      lineTotal: demoLineTotal,
+    };
     const existing = await prisma.purchaseOrder.findUnique({ where: { number: PO_DEMO_NUMBER } });
+    let demoId: string;
     if (existing) {
       await prisma.purchaseOrderLine.deleteMany({ where: { purchaseOrderId: existing.id } });
       await prisma.purchaseOrder.update({
         where: { id: existing.id },
         data: {
           status: 'DRAFT',
-          supplierId: (await prisma.supplier.findUniqueOrThrow({ where: { code: 'SUP01' } })).id,
+          statusReason: null,
+          supplierId,
           storeId: b01Id,
           expectedReceiptDate: new Date('2026-02-01T00:00:00.000Z'),
           total: demoLineTotal,
           createdById: buyer?.id ?? null,
-          lines: {
-            create: [
-              {
-                productId: sku001Id,
-                sku: 'SKU001',
-                productName: sku001?.name ?? 'SKU001',
-                quantity: demoQuantity,
-                unitPrice: demoUnitPrice,
-                lineTotal: demoLineTotal,
-              },
-            ],
-          },
+          lines: { create: [demoLine] },
         },
       });
+      demoId = existing.id;
     } else {
-      await prisma.purchaseOrder.create({
+      const created = await prisma.purchaseOrder.create({
         data: {
           number: PO_DEMO_NUMBER,
           status: 'DRAFT',
-          supplierId: (await prisma.supplier.findUniqueOrThrow({ where: { code: 'SUP01' } })).id,
+          supplierId,
           storeId: b01Id,
           expectedReceiptDate: new Date('2026-02-01T00:00:00.000Z'),
           total: demoLineTotal,
           createdById: buyer?.id ?? null,
-          lines: {
-            create: [
-              {
-                productId: sku001Id,
-                sku: 'SKU001',
-                productName: sku001?.name ?? 'SKU001',
-                quantity: demoQuantity,
-                unitPrice: demoUnitPrice,
-                lineTotal: demoLineTotal,
-              },
-            ],
-          },
+          lines: { create: [demoLine] },
         },
       });
+      demoId = created.id;
     }
+    // Advance through the valid transitions to the TOR's Approved fixture state.
+    await prisma.purchaseOrder.update({
+      where: { id: demoId },
+      data: { status: 'PENDING_APPROVAL' },
+    });
+    await prisma.purchaseOrder.update({
+      where: { id: demoId },
+      data: { status: 'APPROVED' },
+    });
   }
 
   // Reset to exactly the fixture: drop anything left over from an earlier seed or from tests that

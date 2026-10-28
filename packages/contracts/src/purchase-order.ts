@@ -1,9 +1,12 @@
 import { oc } from '@orpc/contract';
 import * as z from 'zod';
+import type { Role } from './auth.js';
 import {
+  PO_CANCEL_REASON_REQUIRED_MESSAGE,
   PO_DUPLICATE_SKU_MESSAGE,
   PO_LINES_REQUIRED_MESSAGE,
   PO_QUANTITY_POSITIVE_MESSAGE,
+  PO_REJECT_REASON_REQUIRED_MESSAGE,
   PO_UNIT_PRICE_NONNEGATIVE_MESSAGE,
 } from './errors.js';
 import { paginated, PaginationInputSchema } from './pagination.js';
@@ -77,12 +80,16 @@ export type PurchaseOrderLine = z.infer<typeof PurchaseOrderLineSchema>;
 /**
  * A purchase order as the API exposes it. `total` is the sum of the line totals (Section 4.3), a
  * two-decimal money string. `number` is the unique document number allocated at creation. `status`
- * is `DRAFT` for every order this ticket creates.
+ * is driven only by valid transitions in {@link PO_TRANSITIONS} — never set directly. `statusReason`
+ * is the mandatory reason captured on the last reject or cancel (PO-03/PO-04); it is null for an
+ * order that has never been rejected or cancelled, so a rejected order stays viewable *with* the
+ * explanation that was given.
  */
 export const PurchaseOrderSchema = z.object({
   id: z.string(),
   number: z.string(),
   status: PurchaseOrderStatusSchema,
+  statusReason: z.string().nullable(),
   supplierId: z.string(),
   storeId: z.string(),
   expectedReceiptDate: z.iso.datetime(),
@@ -128,6 +135,155 @@ export type PurchaseOrderList = z.infer<typeof PurchaseOrderListSchema>;
 export const PurchaseOrderGetInputSchema = z.object({ id: z.string().min(1) });
 export type PurchaseOrderGetInput = z.infer<typeof PurchaseOrderGetInputSchema>;
 
+/**
+ * The actions that move a purchase order through its lifecycle. Each one is a *transition*, never a
+ * direct status assignment: the user picks an action, the server looks it up in {@link PO_TRANSITIONS}
+ * and rejects anything the table does not allow (PO-03). `receive` and `complete` are owned by goods
+ * receipt (#9); they are listed here so the one authoritative table already contains the receiving
+ * transitions #9 plugs into, but #8 only implements `submit`/`approve`/`reject`/`cancel`.
+ */
+export const PurchaseOrderActionSchema = z.enum([
+  'submit',
+  'approve',
+  'reject',
+  'cancel',
+  'receive',
+  'complete',
+]);
+export type PurchaseOrderAction = z.infer<typeof PurchaseOrderActionSchema>;
+
+/** Who may drive a transition, and whether a reason is mandatory for it. */
+export interface PurchaseOrderTransition {
+  readonly action: PurchaseOrderAction;
+  readonly from: PurchaseOrderStatus;
+  readonly to: PurchaseOrderStatus;
+  /**
+   * The roles allowed to perform the transition. `creator` is a pseudo-role meaning "the user who
+   * created the order"; the handler resolves it against the authenticated principal. An empty role
+   * set would mean nobody, which never occurs.
+   */
+  readonly who: readonly (Role | 'creator')[];
+  /** When true the transition requires a non-empty reason (PO-03 reject, PO-04 cancel). */
+  readonly requiresReason: boolean;
+}
+
+/**
+ * THE authoritative purchase-order transition table (spec #1 "PO/GR state machine", PO-03).
+ *
+ * This is the single source of truth for `from → to → who → required inputs`. The API rejects any
+ * status change that is not a row here (illegal transition, or a direct status set); users never
+ * set status directly. The lifecycle it encodes:
+ *
+ *   DRAFT ── submit ──▶ PENDING_APPROVAL ── approve ─▶ APPROVED ── receive ─▶ PARTIALLY_RECEIVED
+ *                            │                              │                        │
+ *                            │ reject                       │ receive (final)        │ receive
+ *                            ▼                              ▼                        ▼
+ *                         REJECTED                       COMPLETED  ◀── complete ── PARTIALLY_RECEIVED
+ *
+ *   cancel: DRAFT or PENDING_APPROVAL ──▶ CANCELLED (creator or manager, with a reason)
+ *
+ * A rejected order is terminal: there is no transition out of REJECTED, so it stays viewable and a
+ * brand-new order is required to re-order (PO-03, story 25). Cancel is allowed only from DRAFT or
+ * PENDING_APPROVAL, so an APPROVED or later order cannot be cancelled (PO-04, story 26).
+ *
+ * The `receive`/`complete` rows are the receiving transitions owned by #9; #8 does not implement
+ * their handlers but keeps them in the one table so #9 plugs in without reshaping the state machine.
+ */
+export const PO_TRANSITIONS: readonly PurchaseOrderTransition[] = [
+  {
+    action: 'submit',
+    from: 'DRAFT',
+    to: 'PENDING_APPROVAL',
+    who: ['PURCHASING'],
+    requiresReason: false,
+  },
+  {
+    action: 'approve',
+    from: 'PENDING_APPROVAL',
+    to: 'APPROVED',
+    who: ['MANAGER'],
+    requiresReason: false,
+  },
+  {
+    action: 'reject',
+    from: 'PENDING_APPROVAL',
+    to: 'REJECTED',
+    who: ['MANAGER'],
+    requiresReason: true,
+  },
+  {
+    action: 'cancel',
+    from: 'DRAFT',
+    to: 'CANCELLED',
+    who: ['creator', 'MANAGER'],
+    requiresReason: true,
+  },
+  {
+    action: 'cancel',
+    from: 'PENDING_APPROVAL',
+    to: 'CANCELLED',
+    who: ['creator', 'MANAGER'],
+    requiresReason: true,
+  },
+  // Receiving (#9). Listed for completeness of the one authoritative table; #8 does not implement them.
+  {
+    action: 'receive',
+    from: 'APPROVED',
+    to: 'PARTIALLY_RECEIVED',
+    who: ['STAFF'],
+    requiresReason: false,
+  },
+  {
+    action: 'receive',
+    from: 'PARTIALLY_RECEIVED',
+    to: 'PARTIALLY_RECEIVED',
+    who: ['STAFF'],
+    requiresReason: false,
+  },
+  { action: 'complete', from: 'APPROVED', to: 'COMPLETED', who: ['STAFF'], requiresReason: false },
+  {
+    action: 'complete',
+    from: 'PARTIALLY_RECEIVED',
+    to: 'COMPLETED',
+    who: ['STAFF'],
+    requiresReason: false,
+  },
+];
+
+/**
+ * Look up the single transition for `action` from `from`, or `undefined` if the table has no such
+ * row (an illegal transition, which the API rejects). Every `(action, from)` pair in
+ * {@link PO_TRANSITIONS} is unique, so at most one row matches.
+ */
+export function findPurchaseOrderTransition(
+  action: PurchaseOrderAction,
+  from: PurchaseOrderStatus,
+): PurchaseOrderTransition | undefined {
+  return PO_TRANSITIONS.find((t) => t.action === action && t.from === from);
+}
+
+/** Submitting a draft for approval (PO-02). No reason required. */
+export const PurchaseOrderSubmitInputSchema = z.object({ id: z.string().min(1) });
+export type PurchaseOrderSubmitInput = z.infer<typeof PurchaseOrderSubmitInputSchema>;
+
+/** Approving a submitted order (PO-03). No reason required. */
+export const PurchaseOrderApproveInputSchema = z.object({ id: z.string().min(1) });
+export type PurchaseOrderApproveInput = z.infer<typeof PurchaseOrderApproveInputSchema>;
+
+/** Rejecting a submitted order (PO-03). The reason is mandatory and trimmed non-empty. */
+export const PurchaseOrderRejectInputSchema = z.object({
+  id: z.string().min(1),
+  reason: z.string().trim().min(1, { message: PO_REJECT_REASON_REQUIRED_MESSAGE }),
+});
+export type PurchaseOrderRejectInput = z.infer<typeof PurchaseOrderRejectInputSchema>;
+
+/** Cancelling a Draft or Pending Approval order (PO-04). The reason is mandatory and trimmed. */
+export const PurchaseOrderCancelInputSchema = z.object({
+  id: z.string().min(1),
+  reason: z.string().trim().min(1, { message: PO_CANCEL_REASON_REQUIRED_MESSAGE }),
+});
+export type PurchaseOrderCancelInput = z.infer<typeof PurchaseOrderCancelInputSchema>;
+
 export const purchaseOrderContract = {
   list: oc
     .route({
@@ -155,5 +311,41 @@ export const purchaseOrderContract = {
       tags: ['Purchase orders'],
     })
     .input(PurchaseOrderCreateInputSchema)
+    .output(PurchaseOrderSchema),
+  submit: oc
+    .route({
+      method: 'POST',
+      path: '/purchase-orders/{id}/submit',
+      summary: 'Submit a draft purchase order for approval (DRAFT → PENDING_APPROVAL)',
+      tags: ['Purchase orders'],
+    })
+    .input(PurchaseOrderSubmitInputSchema)
+    .output(PurchaseOrderSchema),
+  approve: oc
+    .route({
+      method: 'POST',
+      path: '/purchase-orders/{id}/approve',
+      summary: 'Approve a submitted purchase order (PENDING_APPROVAL → APPROVED)',
+      tags: ['Purchase orders'],
+    })
+    .input(PurchaseOrderApproveInputSchema)
+    .output(PurchaseOrderSchema),
+  reject: oc
+    .route({
+      method: 'POST',
+      path: '/purchase-orders/{id}/reject',
+      summary: 'Reject a submitted purchase order with a reason (PENDING_APPROVAL → REJECTED)',
+      tags: ['Purchase orders'],
+    })
+    .input(PurchaseOrderRejectInputSchema)
+    .output(PurchaseOrderSchema),
+  cancel: oc
+    .route({
+      method: 'POST',
+      path: '/purchase-orders/{id}/cancel',
+      summary: 'Cancel a Draft or Pending Approval purchase order with a reason (→ CANCELLED)',
+      tags: ['Purchase orders'],
+    })
+    .input(PurchaseOrderCancelInputSchema)
     .output(PurchaseOrderSchema),
 };

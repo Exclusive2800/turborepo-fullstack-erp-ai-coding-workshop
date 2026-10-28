@@ -54,6 +54,29 @@ export const PO_DUPLICATE_SKU_MESSAGE =
 export const PO_LINES_REQUIRED_MESSAGE =
   'ใบสั่งซื้อต้องมีสินค้าอย่างน้อย 1 รายการ กรุณาเพิ่มรายการสินค้า';
 
+/**
+ * A purchase-order status change was requested that the authoritative transition table does not
+ * allow — the wrong source status for the action, or a status that can no longer change (PO-03).
+ * The user cannot retry the same action; the order is not in a state that permits it.
+ */
+export const PO_ILLEGAL_TRANSITION_MESSAGE =
+  'ไม่สามารถเปลี่ยนสถานะใบสั่งซื้อนี้ได้ เนื่องจากสถานะปัจจุบันไม่รองรับการดำเนินการนี้';
+
+/** A manager rejected a purchase order without a reason (PO-03). The user must supply a reason. */
+export const PO_REJECT_REASON_REQUIRED_MESSAGE =
+  'กรุณาระบุเหตุผลในการปฏิเสธใบสั่งซื้อ เพื่อให้สามารถตรวจสอบย้อนหลังได้';
+
+/** A purchase order was cancelled without a reason (PO-04). The user must supply a reason. */
+export const PO_CANCEL_REASON_REQUIRED_MESSAGE =
+  'กรุณาระบุเหตุผลในการยกเลิกใบสั่งซื้อ เพื่อให้สามารถตรวจสอบย้อนหลังได้';
+
+/**
+ * An approved purchase order's lines/quantities/prices/destination store cannot be changed (PO-03).
+ * The user cannot retry; an approved commitment is frozen.
+ */
+export const PO_APPROVED_FROZEN_MESSAGE =
+  'ใบสั่งซื้อที่อนุมัติแล้วไม่สามารถแก้ไขรายการ จำนวน ราคา หรือสาขาปลายทางได้';
+
 /** A sale-line quantity was not a positive whole number (SAL-01). The user must correct the input. */
 export const SALE_QUANTITY_POSITIVE_MESSAGE =
   'จำนวนขายต้องเป็นจำนวนเต็มบวก (มากกว่า 0 และไม่มีเศษทศนิยม) กรุณาแก้ไข';

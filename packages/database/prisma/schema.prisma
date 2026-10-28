@@ -213,6 +213,9 @@ model PurchaseOrder {
   id                  String              @id @default(cuid())
   number              String              @unique
   status              PurchaseOrderStatus @default(DRAFT)
+  /// The mandatory reason captured on the last reject (PO-03) or cancel (PO-04); NULL for an order
+  /// that has never been rejected or cancelled. A rejected order stays viewable *with* this reason.
+  statusReason        String?
   supplierId          String
   supplier            Supplier            @relation(fields: [supplierId], references: [id])
   storeId             String
