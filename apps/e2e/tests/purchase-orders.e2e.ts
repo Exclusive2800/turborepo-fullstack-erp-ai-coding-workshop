@@ -85,14 +85,15 @@ test.describe('draft purchase orders', () => {
     await page.getByRole('button', { name: 'บันทึกใบสั่งซื้อ' }).click();
     await expect(page.getByRole('alert')).toContainText('สินค้าซ้ำ');
 
-    // A negative price is rejected at the contract boundary. Point line 2 at sku2 and set a
-    // negative price; the native min="0" is bypassed by typing, so the API returns the Thai error.
+    // A negative price is rejected before the order is ever saved: the price input is `min="0"`, so
+    // the browser refuses to submit the form with a negative value and no draft is created. Point
+    // line 2 at sku2 (clearing the duplicate) and type a negative price, then try to save.
     await page
       .getByLabel('สินค้า 2')
       .selectOption({ label: `${sku2} — กระดาษทิชชูสำหรับทดสอบใบสั่งซื้อ` });
     await page.getByLabel('ราคาต่อหน่วย 2').fill('-5');
     await page.getByRole('button', { name: 'บันทึกใบสั่งซื้อ' }).click();
-    await expect(page.getByRole('alert')).toContainText('ติดลบ');
+    await expect(page.getByText('บันทึกใบสั่งซื้อฉบับร่างแล้ว')).toHaveCount(0);
 
     // A well-formed draft with two distinct lines is accepted and appears in the list at DRAFT.
     await page.getByLabel('ราคาต่อหน่วย 2').fill('35');
