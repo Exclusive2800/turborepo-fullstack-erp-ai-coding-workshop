@@ -22,6 +22,7 @@
     "db:generate": "pnpm --filter @erp/database db:generate",
     "db:migrate": "pnpm --filter @erp/database db:migrate",
     "db:deploy": "pnpm --filter @erp/database db:deploy",
+    "db:status": "pnpm --filter @erp/database db:status",
     "db:reset": "pnpm --filter @erp/database db:reset",
     "db:seed": "pnpm --filter @erp/database db:seed",
     "db:studio": "pnpm --filter @erp/database db:studio",
