@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import {
   REPORT_DATE_RANGE_INVALID_MESSAGE,
@@ -6,10 +6,12 @@ import {
   REPORTING_TIME_ZONE,
   RETRY_MESSAGE,
 } from '@erp/contracts';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { orpc } from '@/lib/orpc';
+import { downloadCsv } from '@/lib/download-csv';
+import { client, orpc } from '@/lib/orpc';
 
 /** Today as an Asia/Bangkok calendar day (`YYYY-MM-DD`), the reporting day's own zone. */
 function todayInBangkok(): string {
@@ -49,6 +51,14 @@ export function ReportsPage() {
   );
   const data = report.data;
   const isEmpty = !!data && data.documentCount === 0;
+
+  // CSV export (RPT-04, #20): the same filters and MANAGER permission as the on-screen report. The
+  // API builds the Thai-safe, formula-injection-safe CSV; the browser saves it verbatim.
+  const exportInput = { from, to, ...(storeId ? { storeId } : {}) };
+  const exportCsv = useMutation({
+    mutationFn: () => client.report.salesCsv(exportInput),
+    onSuccess: downloadCsv,
+  });
 
   return (
     <div className="space-y-6">
@@ -108,6 +118,21 @@ export function ReportsPage() {
           <CardTitle className="text-lg">สรุปยอดขายที่ยืนยันแล้ว</CardTitle>
         </CardHeader>
         <CardContent>
+          <div className="mb-4">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => exportCsv.mutate()}
+              disabled={!rangeValid || exportCsv.isPending}
+            >
+              ส่งออก CSV
+            </Button>
+            {exportCsv.isError && (
+              <p role="alert" className="mt-2 text-sm text-destructive">
+                {RETRY_MESSAGE}
+              </p>
+            )}
+          </div>
           {report.isPending && rangeValid && (
             <p role="status" className="text-sm text-muted-foreground">
               กำลังโหลด…

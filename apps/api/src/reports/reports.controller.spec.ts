@@ -1,6 +1,6 @@
 import { Reflector } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
-import { reportingDayInterval } from '@erp/contracts';
+import { reportingDayInterval, UTF8_BOM } from '@erp/contracts';
 import { call } from '@orpc/server';
 import { describe, expect, it, vi } from 'vitest';
 import { ROLES_KEY } from '../auth/auth.decorators.js';
@@ -542,5 +542,95 @@ describe('ReportsController', () => {
   it('leaves the movement-history report open to any signed-in user', () => {
     const reflector = new Reflector();
     expect(reflector.get(ROLES_KEY, ReportsController.prototype.movementHistory)).toBeUndefined();
+  });
+
+  describe('salesCsv (Seam 1, RPT-04 #20)', () => {
+    it('exports the daily sales report as a Thai-safe, formula-injection-safe CSV using the same filters', async () => {
+      const aggregate = vi
+        .fn()
+        .mockResolvedValue({ _count: { _all: 3 }, _sum: { total: money(455) } });
+      const lineAggregate = vi.fn().mockResolvedValue({ _sum: { quantity: 9 } });
+      const { controller } = await createController({ aggregate, lineAggregate });
+
+      const result = await call(controller.salesCsv(), {
+        from: '2026-01-15',
+        to: '2026-01-15',
+        storeId: 'store-b01',
+      });
+
+      // Same CONFIRMED-sale filter as the on-screen report (the export reuses the report query).
+      const interval = reportingDayInterval('2026-01-15', '2026-01-15');
+      expect(aggregate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            status: 'CONFIRMED',
+            storeId: 'store-b01',
+            confirmedAt: { gte: interval.startUtc, lt: interval.endUtc },
+          },
+        }),
+      );
+
+      // A filename naming the range, and a BOM-prefixed CSV carrying the aggregate figures.
+      expect(result.filename).toBe('daily-sales-2026-01-15_2026-01-15.csv');
+      expect(result.content.startsWith(UTF8_BOM)).toBe(true);
+      expect(result.content).toContain('455.00');
+      expect(result.content).toContain('9');
+      expect(result.content).toContain('3');
+    });
+  });
+
+  // Authz: the daily-sales CSV export carries the SAME permission as the report it exports (MANAGER).
+  it('restricts the daily-sales CSV export to MANAGER, like the report it exports', () => {
+    const reflector = new Reflector();
+    expect(reflector.get(ROLES_KEY, ReportsController.prototype.salesCsv)).toEqual(['MANAGER']);
+  });
+
+  describe('stockOnHandCsv (Seam 1, RPT-04 #20)', () => {
+    const detergentProduct = { sku: 'SKU003', name: 'Detergent', unit: 'bag' };
+
+    it('exports the stock-on-hand report as a Thai-safe CSV using the same filters', async () => {
+      const balanceFindMany = vi
+        .fn()
+        .mockResolvedValue([balanceRow('p3', 's1', 0, detergentProduct, 'B01')]);
+      const thresholdFindMany = vi
+        .fn()
+        .mockResolvedValue([{ productId: 'p3', storeId: 's1', threshold: 3 }]);
+      const { controller } = await createController({ balanceFindMany, thresholdFindMany });
+
+      const result = await call(controller.stockOnHandCsv(), { storeId: 's1', query: 'SKU003' });
+
+      // Reuses the on-hand query: store scope and SKU-or-name search.
+      const where = balanceFindMany.mock.calls[0]?.[0]?.where;
+      expect(where.storeId).toBe('s1');
+      expect(where.product.OR).toEqual([
+        { sku: { contains: 'SKU003', mode: 'insensitive' } },
+        { name: { contains: 'SKU003', mode: 'insensitive' } },
+      ]);
+
+      expect(result.filename).toBe('stock-on-hand.csv');
+      expect(result.content.startsWith(UTF8_BOM)).toBe(true);
+      expect(result.content).toContain('SKU003');
+      expect(result.content).toContain('Detergent');
+    });
+
+    it('neutralizes a product name that a spreadsheet would read as a formula (CWE-1236)', async () => {
+      const malicious = { sku: 'SKU666', name: "=cmd|' /C calc'!A0", unit: 'ชิ้น' };
+      const balanceFindMany = vi
+        .fn()
+        .mockResolvedValue([balanceRow('p9', 's1', 5, malicious, 'B01')]);
+      const { controller } = await createController({ balanceFindMany });
+
+      const result = await call(controller.stockOnHandCsv(), { storeId: 's1' });
+
+      // The dangerous cell is stored as literal text (leading apostrophe) so no formula executes.
+      expect(result.content).toContain("'=cmd|' /C calc'!A0");
+      expect(result.content).not.toMatch(/,=cmd/);
+    });
+  });
+
+  // Authz: the stock-on-hand CSV export is open to any permitted user, like the report it exports.
+  it('leaves the stock-on-hand CSV export open to any signed-in user, like the report it exports', () => {
+    const reflector = new Reflector();
+    expect(reflector.get(ROLES_KEY, ReportsController.prototype.stockOnHandCsv)).toBeUndefined();
   });
 });

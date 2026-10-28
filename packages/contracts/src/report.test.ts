@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CsvExportSchema,
   DailySalesReportInputSchema,
   LowStockReportInputSchema,
   MovementHistoryReportInputSchema,
@@ -170,6 +171,21 @@ describe('MovementHistoryReportInputSchema', () => {
 
   it('rejects a blank storeId', () => {
     const parsed = MovementHistoryReportInputSchema.safeParse({ storeId: '' });
+    expect(parsed.success).toBe(false);
+  });
+});
+
+describe('CsvExportSchema', () => {
+  it('accepts a filename and CSV content payload', () => {
+    const parsed = CsvExportSchema.safeParse({
+      filename: 'daily-sales-2026-01-15.csv',
+      content: '\uFEFFa,b\r\n1,2\r\n',
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('rejects a payload missing the content', () => {
+    const parsed = CsvExportSchema.safeParse({ filename: 'x.csv' });
     expect(parsed.success).toBe(false);
   });
 });

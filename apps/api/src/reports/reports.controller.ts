@@ -1,6 +1,7 @@
 import { Controller } from '@nestjs/common';
 import {
   contract,
+  type CsvExport,
   type DailySalesReport,
   type DailySalesReportInput,
   isCrossStoreRole,
@@ -12,6 +13,7 @@ import {
   type StockItem,
   type StockOnHandReport,
   STORE_SCOPE_UNASSIGNED_MESSAGE,
+  toCsv,
   type Whoami,
 } from '@erp/contracts';
 import { Implement, implement, ORPCError } from '@orpc/nest';
@@ -186,6 +188,39 @@ export class ReportsController {
   }
 
   /**
+   * Compute the daily sales aggregate (RPT-01) for the given filters: the CONFIRMED-sale document
+   * count, units summed across their lines and the two-decimal money total, over the half-open
+   * Bangkok interval. Shared by the on-screen report ({@link dailySales}) and the CSV export
+   * ({@link salesCsv}) so both apply the identical filter and figures.
+   */
+  private async dailySalesReport(input: DailySalesReportInput): Promise<DailySalesReport> {
+    const where = confirmedSaleWhere(input);
+
+    // Document count + summed amount over the confirmed sales, and units summed over their lines.
+    const [sales, lines] = await Promise.all([
+      this.prisma.sale.aggregate({
+        where,
+        _count: { _all: true },
+        _sum: { total: true },
+      }),
+      this.prisma.saleLine.aggregate({
+        where: { sale: where },
+        _sum: { quantity: true },
+      }),
+    ]);
+
+    const amount = sales._sum.total ? sales._sum.total.toFixed(2) : '0.00';
+    return {
+      from: input.from,
+      to: input.to,
+      storeId: input.storeId ?? null,
+      documentCount: sales._count._all,
+      unitsSold: lines._sum.quantity ?? 0,
+      amount,
+    };
+  }
+
+  /**
    * Daily sales report over an Asia/Bangkok reporting-day range (RPT-01, user story 46/51, AC-08
    * sales-zero half). Open to MANAGER (`@Roles('MANAGER')`). Counts only CONFIRMED sales whose
    * confirmation timestamp falls in the half-open Bangkok interval, optionally scoped to one store,
@@ -198,33 +233,9 @@ export class ReportsController {
   @Roles('MANAGER')
   @Implement(contract.report.dailySales)
   dailySales() {
-    return implement(contract.report.dailySales).handler(async ({ input }) => {
-      const where = confirmedSaleWhere(input);
-
-      // Document count + summed amount over the confirmed sales, and units summed over their lines.
-      const [sales, lines] = await Promise.all([
-        this.prisma.sale.aggregate({
-          where,
-          _count: { _all: true },
-          _sum: { total: true },
-        }),
-        this.prisma.saleLine.aggregate({
-          where: { sale: where },
-          _sum: { quantity: true },
-        }),
-      ]);
-
-      const amount = sales._sum.total ? sales._sum.total.toFixed(2) : '0.00';
-      const report: DailySalesReport = {
-        from: input.from,
-        to: input.to,
-        storeId: input.storeId ?? null,
-        documentCount: sales._count._all,
-        unitsSold: lines._sum.quantity ?? 0,
-        amount,
-      };
-      return report;
-    });
+    return implement(contract.report.dailySales).handler(({ input }) =>
+      this.dailySalesReport(input),
+    );
   }
 
   /**
@@ -327,6 +338,60 @@ export class ReportsController {
         pageSize,
       };
       return report;
+    });
+  }
+
+  /**
+   * Daily sales report CSV export (RPT-04, #20). Reuses the exact {@link dailySalesReport} query —
+   * same CONFIRMED-sale filter, same Bangkok interval, same store scope — and carries the SAME
+   * MANAGER permission as the on-screen report, so an unpermitted caller is rejected by the role
+   * gate. The single aggregate row is serialized by {@link toCsv}, which emits a UTF-8 BOM (Thai
+   * renders in Excel) and neutralizes any formula-trigger cell (CWE-1236). The filename names the
+   * exported range.
+   */
+  @Roles('MANAGER')
+  @Implement(contract.report.salesCsv)
+  salesCsv() {
+    return implement(contract.report.salesCsv).handler(async ({ input }) => {
+      const report = await this.dailySalesReport(input);
+      const content = toCsv(
+        ['ตั้งแต่วันที่', 'ถึงวันที่', 'จำนวนเอกสาร', 'จำนวนหน่วยที่ขาย', 'ยอดขายรวม (บาท)'],
+        [[report.from, report.to, report.documentCount, report.unitsSold, report.amount]],
+      );
+      const csv: CsvExport = {
+        filename: `daily-sales-${input.from}_${input.to}.csv`,
+        content,
+      };
+      return csv;
+    });
+  }
+
+  /**
+   * Stock-on-hand report CSV export (RPT-04, #20). Reuses the exact {@link onHandRows} query — same
+   * optional store scope and SKU-or-name search, same per-store threshold and low-stock rule, same
+   * zero-stock-stays-visible behaviour — and is open to any permitted user, like the report it
+   * exports. Each row is serialized by {@link toCsv}, which emits a UTF-8 BOM so Thai product names
+   * render in Excel and neutralizes any cell a spreadsheet would read as a formula (CWE-1236), so a
+   * product named `=cmd…` cannot execute.
+   */
+  @Implement(contract.report.stockOnHandCsv)
+  stockOnHandCsv() {
+    return implement(contract.report.stockOnHandCsv).handler(async ({ input }) => {
+      const items = await this.onHandRows(input.storeId, input.query);
+      const content = toCsv(
+        ['SKU', 'ชื่อ', 'สาขา', 'คงเหลือ', 'หน่วย', 'จุดสั่งซื้อ', 'สถานะ'],
+        items.map((item) => [
+          item.sku,
+          item.name,
+          item.storeCode,
+          item.quantity,
+          item.unit,
+          item.reorderThreshold ?? '',
+          item.lowStock ? 'ใกล้หมด' : 'ปกติ',
+        ]),
+      );
+      const csv: CsvExport = { filename: 'stock-on-hand.csv', content };
+      return csv;
     });
   }
 }

@@ -54,7 +54,10 @@ function row(overrides: Record<string, unknown> = {}) {
 }
 
 describe('StockReportsPage', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
 
   it('shows the stock-on-hand rows once the report resolves, keeping a zero-stock match visible', async () => {
     mockApi(
@@ -176,5 +179,43 @@ describe('StockReportsPage', () => {
     expect(await screen.findByRole('alert', {}, { timeout: 5000 })).toHaveTextContent(
       'เกิดข้อผิดพลาด',
     );
+  });
+
+  it('exports the stock-on-hand report to CSV with the current filters and triggers a download (RPT-04)', async () => {
+    const fetch = mockApi(
+      reference({
+        'GET /reports/stock-on-hand': { storeId: 's1', items: [row()], total: 1 },
+        'GET /reports/stock-on-hand/csv': {
+          filename: 'stock-on-hand.csv',
+          content: '\uFEFFSKU\r\nSKU003\r\n',
+        },
+      }),
+    );
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:fake');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => undefined);
+
+    renderPage();
+
+    await screen.findByRole('option', { name: 'B01 — Central' });
+    fireEvent.change(screen.getByLabelText('ค้นหาสินค้า'), { target: { value: 'SKU003' } });
+    fireEvent.change(screen.getByLabelText('สาขา'), { target: { value: 's1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ส่งออก CSV' }));
+
+    await waitFor(() => {
+      const calls = fetch.mock.calls.filter(
+        ([r]) => new URL(r.url).pathname === '/api/reports/stock-on-hand/csv',
+      );
+      expect(calls.length).toBeGreaterThan(0);
+      // The export carries the same filters as the on-screen report.
+      const url = new URL(calls[calls.length - 1]![0].url);
+      expect(url.searchParams.get('query')).toBe('SKU003');
+      expect(url.searchParams.get('storeId')).toBe('s1');
+    });
+    // The resolved export triggered a browser download from the CSV content.
+    await waitFor(() => expect(clickSpy).toHaveBeenCalled());
+    expect(createObjectURL).toHaveBeenCalled();
   });
 });
