@@ -38,12 +38,16 @@ via [`apps/api/src/openapi/openapi.controller.ts`](../apps/api/src/openapi/opena
 
 ### Auth
 
-| Method | Path           | Access        | Summary                                       |
-| ------ | -------------- | ------------- | --------------------------------------------- |
-| POST   | `/auth/login`  | public        | Sign in with email and password.              |
-| POST   | `/auth/logout` | authenticated | Sign out.                                     |
-| GET    | `/auth/me`     | public        | The signed-in user, or null.                  |
-| GET    | `/auth/whoami` | authenticated | The authenticated caller with role and store. |
+| Method | Path           | Access   | Summary                                       |
+| ------ | -------------- | -------- | --------------------------------------------- |
+| POST   | `/auth/login`  | public   | Sign in with email and password.              |
+| POST   | `/auth/logout` | public   | Sign out (clears the session cookie).         |
+| GET    | `/auth/me`     | public   | The signed-in user, or null.                  |
+| GET    | `/auth/whoami` | public\* | The authenticated caller with role and store. |
+
+\* All auth routes are `@Public()` (the whole `AuthController` opts out of the global guard).
+`whoami` is reachable without a session but returns `UNAUTHORIZED` from its handler when no user is
+signed in.
 
 ### Products (master data, MD-01/MD-02)
 

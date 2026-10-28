@@ -88,8 +88,10 @@ pnpm db:generate                    # regenerate the Prisma client (migrate dev 
 pnpm db:status                      # show migration status
 ```
 
-In Docker, prefix with `docker compose exec api ` (for example
-`docker compose exec api pnpm db:deploy`).
+The default stack runs in Docker, so run the `db:*` scripts **inside the api container**, for
+example `docker compose exec api pnpm db:deploy`. If you have Node 24 + pnpm on the host (see
+`pnpm dev:local` below), the same scripts run directly without the prefix (`pnpm db:deploy`). Pick
+one — don't run `pnpm install`/the apps on both sides.
 
 ## Resettable seed and the test accounts
 
@@ -176,15 +178,13 @@ e2e worker-startup race) are documented in [`docs/known-limitations.md`](known-l
 The API is contract-first: [`packages/contracts`](../packages/contracts) is the single source of
 truth (routes + Zod schemas), the API implements it, and the web calls it through a typed client.
 
-The running API serves generated, always-in-sync documentation from the contract:
+The running API serves generated, always-in-sync documentation:
 
 - Swagger UI: **http://localhost:3000/api/docs**
 - OpenAPI JSON: **http://localhost:3000/api/openapi.json**
 
-Both are generated from `contract` in [`packages/contracts/src/index.ts`](../packages/contracts/src/index.ts)
-by [`apps/api/src/openapi/openapi.controller.ts`](../apps/api/src/openapi/openapi.controller.ts), so
-they never drift from the implemented routes. The full route inventory delivered in this release is
-in [`docs/api.md`](api.md).
+The full route inventory delivered in this release, and how the generated docs stay in sync with the
+contract, are in [`docs/api.md`](api.md).
 
 ## See also
 

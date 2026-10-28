@@ -129,10 +129,6 @@ See [AGENTS.md](AGENTS.md) for the repo conventions and `apps/api/AGENTS.md` / `
 | Seed fails with `invalid input value for enum` | The database volume is shared by every clone of this repo and holds another checkout's migrations. `pnpm docker:clean` (deletes the database), then start again. |
 | Start completely fresh                         | `pnpm docker:clean`, delete `node_modules`, then `docker compose up`                                                                                             |
 
-## Optional: Dev Container
-
-If you use VS Code / Cursor with the Dev Containers extension, choose **"Reopen in Container"**. You get a shell inside the dev image (Node, pnpm, Postgres already wired) and can run `pnpm dev` there.
-
 ## 6. Release handover
 
 The Retail ERP v1 release ships a handover package in [`docs/`](docs/):
@@ -141,3 +137,7 @@ The Retail ERP v1 release ships a handover package in [`docs/`](docs/):
 - [`docs/api.md`](docs/api.md) — the full contract-route inventory delivered in this release (the live, generated docs are at `/api/docs`).
 - [`docs/known-limitations.md`](docs/known-limitations.md) — out-of-scope features, deferred clarifications (Q-01/Q-03/Q-04/Q-05, CR-01), the Q-02 decision, NFR-03 audit coverage, and the test-infrastructure limitations a maintainer must address.
 - [`docs/clarification-register.md`](docs/clarification-register.md) — the TOR §10.1 clarification register.
+
+## Optional: Dev Container
+
+If you use VS Code / Cursor with the Dev Containers extension, choose **"Reopen in Container"**. You get a shell inside the dev image (Node, pnpm, Postgres already wired) and can run `pnpm dev` there.
