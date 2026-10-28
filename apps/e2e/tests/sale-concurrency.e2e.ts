@@ -64,6 +64,15 @@ test.describe('sale confirmation concurrency: exactly one wins', () => {
       return row?.quantity;
     };
 
+    // How many CONFIRMED sales carry a line for this SKU — the "exactly one sale written" half of
+    // AC-07, read over the HTTP surface.
+    const confirmedSaleCount = async () => {
+      const sales = await manager.get('/api/sales?page=1&pageSize=100');
+      return ((await sales.json()).items as { status: string; lines: { sku: string }[] }[]).filter(
+        (sale) => sale.status === 'CONFIRMED' && sale.lines.some((l) => l.sku === sku),
+      ).length;
+    };
+
     // --- Staff: draft two separate 7-unit sales of SKU001, then confirm both at once. ---
     const staff = await playwright.request.newContext();
     await staff.post('/api/auth/login', {
@@ -110,6 +119,8 @@ test.describe('sale confirmation concurrency: exactly one wins', () => {
 
     // Final stock is 10 − 7 = 3: the oversubscribing second sale never deducted.
     expect(await stockFor(), 'final SKU001 stock is 3').toBe(3);
+    // Exactly one sale was written (the winner); the loser stayed a draft.
+    expect(await confirmedSaleCount(), 'exactly one confirmed sale for the SKU').toBe(1);
 
     await staff.dispose();
     await manager.dispose();
