@@ -173,13 +173,13 @@ async function main() {
   }
 
   // Demo purchase order PO-DEMO-001 (TOR Section 8): 20× SKU001 @ 45.00, destination B01, no
-  // receipts, ending at APPROVED. The TOR fixture describes it as *Approved*. Approval is owned by
-  // the PO state machine (#8): users never set status directly — an order only reaches APPROVED by
-  // walking valid transitions DRAFT → PENDING_APPROVAL → APPROVED. The seed reproduces exactly that
-  // path (the same `submit` then `approve` transitions the API performs) rather than writing
-  // APPROVED directly, so the seeded state is one a real caller could have produced. Idempotent: the
-  // row is keyed by its unique document number and its single line is reset to the fixture each run,
-  // then re-walked to APPROVED.
+  // receipts, ending at APPROVED — the TOR fixture's "Approved PO-DEMO-001". Approval is owned by
+  // the PO state machine (#8), where users never set status directly. This seed is not a user: it
+  // writes the status column directly (create at DRAFT, then two updates to PENDING_APPROVAL and
+  // APPROVED) to land the fixture in the same end state a real submit→approve would. The sequence
+  // mirrors the valid path in `@erp/contracts` `PO_TRANSITIONS` so the seeded state is one a caller
+  // could legitimately reach. Idempotent: the row is keyed by its unique document number and its
+  // single line is reset to the fixture each run, then re-advanced to APPROVED.
   const PO_DEMO_NUMBER = 'PO-DEMO-001';
   const sku001Id = productIdBySku.get('SKU001');
   const buyer = await prisma.user.findUnique({ where: { email: 'buyer01@erp.local' } });
@@ -189,11 +189,6 @@ async function main() {
     const demoUnitPrice = '45.00';
     const demoLineTotal = (demoQuantity * Number(demoUnitPrice)).toFixed(2);
     const supplierId = (await prisma.supplier.findUniqueOrThrow({ where: { code: 'SUP01' } })).id;
-    // Walk the state machine's own transitions (#8): create at DRAFT, submit → PENDING_APPROVAL,
-    // approve → APPROVED, the same two transitions the API performs. The authoritative transition
-    // table lives in `@erp/contracts` (`PO_TRANSITIONS`); the seed deliberately reproduces that
-    // DRAFT → PENDING_APPROVAL → APPROVED path step by step rather than writing APPROVED directly,
-    // so the seeded state is one a real caller could have produced through valid transitions.
     const demoLine = {
       productId: sku001Id,
       sku: 'SKU001',

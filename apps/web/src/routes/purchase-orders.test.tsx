@@ -314,11 +314,13 @@ describe('PurchaseOrdersPage', () => {
   });
 
   it('shows the actionable Thai message when cancelling an approved order is rejected', async () => {
-    const approved = { ...draftOrder, status: 'PENDING_APPROVAL' };
+    // A PENDING_APPROVAL order still shows the manager's ยกเลิก button; the server refuses the
+    // cancel once the order is frozen and returns the approved-frozen message, which the row shows.
+    const pending = { ...draftOrder, status: 'PENDING_APPROVAL' };
     mockApi(
       referenceData({
         'GET /auth/me': { user: manager },
-        'GET /purchase-orders': list([approved]),
+        'GET /purchase-orders': list([pending]),
         'POST /purchase-orders/po1/cancel': conflict(PO_APPROVED_FROZEN_MESSAGE),
       }),
     );

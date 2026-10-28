@@ -3,13 +3,14 @@ import {
   contract,
   findPurchaseOrderTransition,
   NOT_FOUND_MESSAGE,
+  PO_APPROVED_FROZEN_MESSAGE,
   PO_ILLEGAL_TRANSITION_MESSAGE,
+  PO_TRANSITION_FORBIDDEN_MESSAGE,
   PRODUCT_INACTIVE_MESSAGE,
   type PurchaseOrder,
   type PurchaseOrderAction,
   type PurchaseOrderLine,
   type PurchaseOrderTransition,
-  STORE_SCOPE_FORBIDDEN_MESSAGE,
   type Whoami,
 } from '@erp/contracts';
 import { Implement, implement, ORPCError } from '@orpc/nest';
@@ -267,9 +268,13 @@ export class PurchaseOrdersController {
 
     const transition = findPurchaseOrderTransition(action, order.status);
     if (!transition) {
-      // The table has no row for this action from this status: an illegal transition, or an
-      // attempt to move a terminal (REJECTED/CANCELLED) or frozen order. Rejected server-side.
-      throw new ORPCError('BAD_REQUEST', { message: PO_ILLEGAL_TRANSITION_MESSAGE });
+      // The table has no row for this action from this status. An APPROVED (or later) order is
+      // frozen: no edit and no submit/approve/reject/cancel transition exists for it, so a change
+      // attempt gets the actionable "approved is frozen" message (PO-03, criterion #3). Any other
+      // missing row is a plain illegal transition (e.g. approve a DRAFT, resubmit a REJECTED).
+      const message =
+        order.status === 'APPROVED' ? PO_APPROVED_FROZEN_MESSAGE : PO_ILLEGAL_TRANSITION_MESSAGE;
+      throw new ORPCError('BAD_REQUEST', { message });
     }
 
     this.assertAllowed(user, order, transition);
@@ -297,8 +302,7 @@ export class PurchaseOrdersController {
    * Enforce the transition's `who`. `@Roles` on each handler already pins the broad role set; this
    * resolves the `creator` pseudo-role (cancel may be done by the order's creator or a MANAGER) by
    * matching the authenticated principal against the order's `createdById`. A caller who is neither
-   * an allowed role nor the creator is forbidden — the approved-frozen message for an edit-shaped
-   * rejection, otherwise the store-scope-style forbidden message.
+   * an allowed role nor the creator is forbidden with an actionable permission message.
    */
   private assertAllowed(
     user: Whoami,
@@ -308,6 +312,6 @@ export class PurchaseOrdersController {
     const allowedByRole = transition.who.some((who) => who !== 'creator' && who === user.role);
     const allowedAsCreator = transition.who.includes('creator') && order.createdById === user.id;
     if (allowedByRole || allowedAsCreator) return;
-    throw new ORPCError('FORBIDDEN', { message: STORE_SCOPE_FORBIDDEN_MESSAGE });
+    throw new ORPCError('FORBIDDEN', { message: PO_TRANSITION_FORBIDDEN_MESSAGE });
   }
 }

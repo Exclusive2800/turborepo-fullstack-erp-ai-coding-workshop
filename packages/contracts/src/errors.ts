@@ -72,10 +72,18 @@ export const PO_CANCEL_REASON_REQUIRED_MESSAGE =
 
 /**
  * An approved purchase order's lines/quantities/prices/destination store cannot be changed (PO-03).
- * The user cannot retry; an approved commitment is frozen.
+ * The user cannot retry; an approved commitment is frozen. Also returned when a status change is
+ * attempted on an already-approved order, since approval is the point the order becomes immutable.
  */
 export const PO_APPROVED_FROZEN_MESSAGE =
   'ใบสั่งซื้อที่อนุมัติแล้วไม่สามารถแก้ไขรายการ จำนวน ราคา หรือสาขาปลายทางได้';
+
+/**
+ * A purchase-order transition was attempted by a user who is neither an allowed role nor the order's
+ * creator (PO-03/PO-04). The user cannot retry; they are not permitted to drive this transition.
+ */
+export const PO_TRANSITION_FORBIDDEN_MESSAGE =
+  'คุณไม่มีสิทธิ์ดำเนินการนี้กับใบสั่งซื้อนี้ กรุณาตรวจสอบสิทธิ์หรือติดต่อผู้จัดการ';
 
 /** A sale-line quantity was not a positive whole number (SAL-01). The user must correct the input. */
 export const SALE_QUANTITY_POSITIVE_MESSAGE =

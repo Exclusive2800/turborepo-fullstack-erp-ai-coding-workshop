@@ -2,9 +2,10 @@ import { Reflector } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import {
   NOT_FOUND_MESSAGE,
+  PO_APPROVED_FROZEN_MESSAGE,
   PO_ILLEGAL_TRANSITION_MESSAGE,
+  PO_TRANSITION_FORBIDDEN_MESSAGE,
   PRODUCT_INACTIVE_MESSAGE,
-  STORE_SCOPE_FORBIDDEN_MESSAGE,
 } from '@erp/contracts';
 import { call } from '@orpc/server';
 import { describe, expect, it, vi } from 'vitest';
@@ -315,12 +316,12 @@ describe('PurchaseOrdersController', () => {
       expect(post).not.toHaveBeenCalled();
     });
 
-    it('submit: an illegal transition (submit an APPROVED order) is rejected server-side', async () => {
+    it('submit: a change attempt on an APPROVED order is refused (frozen) server-side', async () => {
       const { controller, update } = await transitionController(orderRow({ status: 'APPROVED' }));
 
       await expect(call(controller.submit(buyer), { id: 'po1' })).rejects.toMatchObject({
         code: 'BAD_REQUEST',
-        message: PO_ILLEGAL_TRANSITION_MESSAGE,
+        message: PO_APPROVED_FROZEN_MESSAGE,
       });
       expect(update).not.toHaveBeenCalled();
     });
@@ -416,19 +417,54 @@ describe('PurchaseOrdersController', () => {
 
       await expect(
         call(controller.cancel(otherBuyer), { id: 'po1', reason: 'ไม่ใช่เจ้าของ' }),
-      ).rejects.toMatchObject({ code: 'FORBIDDEN', message: STORE_SCOPE_FORBIDDEN_MESSAGE });
+      ).rejects.toMatchObject({ code: 'FORBIDDEN', message: PO_TRANSITION_FORBIDDEN_MESSAGE });
       expect(update).not.toHaveBeenCalled();
     });
 
-    it('cancel: an APPROVED order cannot be cancelled (PO-04) — illegal transition', async () => {
+    it('cancel: an APPROVED order cannot be cancelled (PO-04) — frozen, rejected server-side', async () => {
       const { controller, update } = await transitionController(
         orderRow({ status: 'APPROVED', createdById: 'u-buyer' }),
       );
 
       await expect(
         call(controller.cancel(manager), { id: 'po1', reason: 'สายไป' }),
-      ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: PO_ILLEGAL_TRANSITION_MESSAGE });
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: PO_APPROVED_FROZEN_MESSAGE });
       expect(update).not.toHaveBeenCalled();
+    });
+
+    it('frozen: an APPROVED order rejects every further transition with the frozen message (criterion #3)', async () => {
+      // There is no edit route for a PO, so "lines/qty/price/store cannot be changed" holds by the
+      // absence of a mutation; the only change surface an approved order exposes is a status
+      // transition, and the table has none from APPROVED (except receive/complete owned by #9). Every
+      // submit/approve/reject/cancel against an APPROVED order is therefore refused server-side. The
+      // manager is allowed to drive approve/reject/cancel by role, so each rejection is the
+      // frozen-state check, not an authz failure.
+      const frozen = { code: 'BAD_REQUEST', message: PO_APPROVED_FROZEN_MESSAGE };
+      const approved = () => orderRow({ status: 'APPROVED', createdById: 'u-buyer' });
+
+      const submitCtl = await transitionController(approved());
+      await expect(call(submitCtl.controller.submit(buyer), { id: 'po1' })).rejects.toMatchObject(
+        frozen,
+      );
+      expect(submitCtl.update).not.toHaveBeenCalled();
+
+      const approveCtl = await transitionController(approved());
+      await expect(
+        call(approveCtl.controller.approve(manager), { id: 'po1' }),
+      ).rejects.toMatchObject(frozen);
+      expect(approveCtl.update).not.toHaveBeenCalled();
+
+      const rejectCtl = await transitionController(approved());
+      await expect(
+        call(rejectCtl.controller.reject(manager), { id: 'po1', reason: 'x' }),
+      ).rejects.toMatchObject(frozen);
+      expect(rejectCtl.update).not.toHaveBeenCalled();
+
+      const cancelCtl = await transitionController(approved());
+      await expect(
+        call(cancelCtl.controller.cancel(manager), { id: 'po1', reason: 'x' }),
+      ).rejects.toMatchObject(frozen);
+      expect(cancelCtl.update).not.toHaveBeenCalled();
     });
 
     it('transition on a missing order returns NOT_FOUND', async () => {
